@@ -1,0 +1,142 @@
+<html lang=en>
+<head>
+<title>Quod - board game</title>
+<meta name=description content="Board game written in JavaScript.">
+<meta name=keywords content="Quod, game, board, online, javascript, quad, quasar, play">
+<meta name=author content="Jan Bobrowski (jb AT wizard.ae.krakow.pl)">
+<style><!--
+.title {font: 19px chimera,times,serif; color: #305090}
+.title big {font: 26px chimera,times,serif}
+a {text-decoration: none}
+a:hover {text-decoration: underline}
+.form  {font: 15px "aplos",helvetica,arial}
+.form small {font: 13px "aplos",helvetica,arial}
+--></style>
+<link rel="shortcut icon" href=quod.ico>
+</head>
+<body link=#202050 vlink=#402040 alink=white bgcolor=#D6BB94 background=bg.jpg style=cursor:wait>
+<br>
+<center><small>
+<a href=quod.html><b><img src=quod.gif border=0 width=260 height=140 alt=Quod></b></a><br>
+
+<script language=JavaScript1.1><!--
+ldimg=new Image(); ldimg.src="ld.gif"
+
+function ld()
+{
+	l=new Array()
+	li=new Array()
+	for(var i=0;i<ld.arguments.length;i++) {
+		l[i]=ld.arguments[i]+".gif"
+		li[i]=0
+	}
+}
+
+ld("red","blue","quasar","red!","blue!","field","plain","quasar1","quasar2",
+	"wplain","selblue1","selred1","selblue2","selred2","youlose","youwin")
+
+for(i=l.length;--i>=0;) document.write("<img src=nic.gif width=12 height=6 name=ld"+i+">");
+
+ldn=l.length
+function ldi(n)
+{
+	if(li[n]++) return; // netscape bug fix
+	if(ldn>0)
+		document["ld"+--ldn].src="ld.gif"
+	if(ldn==0)
+		setTimeout("ldend()",250);
+}
+
+function ldend()
+{
+	for(i=0;i<l.length;i++)
+		document['ld'+i].src='nic.gif'
+	if(document.body)
+		document.body.style.cursor = "default"
+}
+//--></script>
+
+<form action=quod.html method=get name=options>
+<table bgcolor=#D0B494 cellpadding=0 cellspacing=0 border=0
+><tr
+><td bgcolor=#9A4F37><img src=ul.gif height=6 width=6
+><td bgcolor=#9A4F37 colspan=4><img src=u.gif height=6 width=480
+><td bgcolor=#9A4F37><img src=ur.gif height=6 width=6
+><tr
+><td bgcolor=#9A4F37><img src=l.gif height=80 width=6
+><td>     <p>
+<td class=form>
+<input type=radio name=type value=CvsH id=CvsH checked> <label for=CvsH>Computer vs human</label> <br>
+<input type=radio name=type value=HvsH id=HvsH> <label for=HvsH>Human vs human</label>
+<td class=form>
+<input type=checkbox name=bluefirst id=blf> <label for=blf>Blue first</label> <br>
+<input type=checkbox name=plfirst id=plf> <label for=plf>Human first</label>
+</td><td align=center class=form><input type=submit value=Start>
+<small><br><input type=checkbox name=small id=smb> <label for=smb>small board</label>
+<td bgcolor=#9A4F37><img src=r.gif height=80 width=6
+><tr
+><td bgcolor=#9A4F37><img src=dl.gif height=6 width=6
+><td bgcolor=#9A4F37 colspan=4><img height=6 width=480 src=d.gif
+><td bgcolor=#9A4F37><img src=dr.gif height=6 width=6></tr>
+</table>
+<small>You need JavaScript 1.1 compatible browser.</small>
+</form>
+<p><hr width=40%><p>
+
+<a name=rules></a>
+<table bgcolor=#F0E8E0 cellpadding=0 cellspacing=0 border=0 width=632>
+<tr>
+<td bgcolor=#9A4F37><img src=ul.gif height=6 width=6></td>
+<td bgcolor=#9A4F37 valign=top colspan=2><img src=u.gif height=6 width=620></td>
+<td bgcolor=#9A4F37><img src=ur.gif height=6 width=6></td>
+</tr>
+<tr valign=top>
+<td bgcolor=#9A4F37><img height=225 width=6 src=l.gif></td>
+<td>
+<ul><br>
+<span class=title><big>R</big>ULES of <big>Q</big>UOD</span>
+<p align=justify><small>
+<img align=right src=fig.gif width=120 height=100 hspace=0 border=0 lowsrc=nic.gif>
+                At the start of the game, each player has 20 attacking pieces - 
+<i>quads</i> (colour) and 6 blocking pieces - 
+<i>quasars</i> (white).
+Quasars are neutral pieces used to occupy places.
+The objective of the game is to place quads so that they outline a
+square. The square, named <i>quod</i>, can be of any size and orientation.
+Player who make quod first is a winner.
+On each turn player places any number of its quasars and single quad. 
+
+When both players run out of its quads, player who has more quasars remaining
+is a winner.
+Quod is played on 11-by-11 square grid board with the four corners missing.
+</small></p>
+<span class=title><big>I</big>NVENTOR</span>
+<p align=justify><small>
+                Quod was devised by <a href=http://www.gkstill.com>G. Keith Still</a> in 1979.
+</small><br><br><br></p>
+</td>
+<td><img src=nic.gif width=10></td>
+<td bgcolor=#9A4F37><img height=225 width=6 src=r.gif></td>
+</tr>
+<tr>
+<td bgcolor=#9A4F37><img src=dl.gif height=6 width=6></td>
+<td bgcolor=#9A4F37 valign=bottom colspan=2><img height=6 width=620 src=d.gif></td>
+<td bgcolor=#9A4F37><img src=dr.gif height=6 width=6></td>
+</tr>
+</table>
+
+<p><hr width=40%><p>
+<small><a href=http://wizard.ae.krakow.pl/~jb/>by JB</a></small>
+<p><hr width=30%><hr width=20%><hr width=10%>
+<font size=-1 color=gray><? require "/home/old/jb/php/counter.php" ?>
+</center>
+
+<script language=JavaScript1.1><!--
+document.writeln("<div style=position:absolute;visibility:hidden>")
+for(i=0;i<l.length;i++)
+	document.write("<img src="+l[i]+" width=1 height=1 onload=ldi("+i+")>")
+document.writeln("</div>")
+//--></script>
+
+</body>
+</html>

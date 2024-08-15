@@ -1,0 +1,868 @@
+<html><!--
+
+	Quod (Quad) version 0.21
+
+	Copyright (C) 1998-2002 by Jan Bobrowski
+
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 1, or (at your option)
+	any later version.
+
+-->
+<head>
+<title>Quod</title>
+<meta name=robots content=noindex>
+<link rel="shortcut icon" href=quod.ico>
+</head>
+<style><!--
+#quasar {position:absolute; top:0px; left:0px; width:40px; height:40px; visibility:hidden;}
+img {cursor:hand}
+//--></style>
+
+<body bgcolor=#DCC098 text=#987050 link=#987050 vlink=#987050 alink=white
+background=bg.jpg onResize=setTimeout("reszev()",100)>
+<center>
+<script><!--
+function wr(w) {document.write(w);}
+loaded=interact=game=board=lines=false
+ok=false
+
+dyn=0
+if(document.layers) dyn=1;
+if(document.getElementById) dyn=3;
+if(document.all) dyn=2;
+
+function layer(n)
+{
+	if(dyn==1) return document.layers[n]
+	if(dyn==2) return document.all[n].style
+	if(dyn==3) return document.getElementById(n).style
+}
+
+//--></script>
+<script language=JavaScript1.1><!--
+ok=true;
+pic=new Object();
+pic.q=new Image(); pic.q.src="quasar.gif";
+pic.R=new Image(); pic.R.src="red.gif";
+pic.B=new Image(); pic.B.src="blue.gif";
+pic.mR=new Image(); pic.mR.src="red!.gif";
+pic.mB=new Image(); pic.mB.src="blue!.gif";
+//--></script>
+
+<noscript language=javascript1.1>Your browser is <font color=#C84840>not</font> JavaScript 1.1 compatible. Sorry<p>
+<small>[ <a href=index.html>menu</a> ]</noscript>
+
+<script><!--
+flashId=null;
+msg=""
+
+function refuse() {return false}
+
+function ngev()
+{
+	interact=0;
+	if(flashId) // Netscape 6b1 bug
+		clearTimeout(flashId);
+	document.stat.src="wplain.gif";
+	board.clear();
+	setTimeout("newGame();",400);
+}
+
+function selev(i,n)
+{
+	if(!game||!interact) return;
+	if(player.id!=i) return;
+	if(player.quasars<=0) quadSel=true;
+	else
+		quadSel=n?n==2:!quadSel;
+	dispSel(i);
+}
+
+function putev(n)
+{
+	if(!interact) return;
+	if(!game) {ngev(); return;}
+	if(board.fields[n]!=" ") return;
+	if(quadSel) {
+		player.putQuad(n);
+		turn(false);
+	} else {
+		player.putQuasar(n);
+		quadSel=true;
+		dispSel(player.id);
+	}
+}
+
+function put2ev(n)
+{
+	if(!interact) return;
+	if(!game) {ngev(); return;}
+	if(board.fields[n]!=" ") return;
+	player.putQuasar(n);
+	quadSel=true;
+	dispSel(player.id);
+}
+
+function reszev()
+{
+	var bs=posOf("AA")
+	if(lines)
+		for(i=0;i<lines.used;i++) {
+			var l=lines.lays[i].style
+			l.left = debill(l.left) + bs.x - base.x
+			l.top = debill(l.top) + bs.y - base.y
+		}
+	base=bs;
+}
+
+//--></script>
+<script><!--
+
+function arg(n)
+{
+	var s=location.search.substring(1);
+	while(s!="") {
+		i=s.indexOf("&");
+		if(i<0) i=s.length;
+		var a;
+		a=s.substring(0,i);
+		s=s.substring(i+1,s.length);
+		var j=a.indexOf("=");
+		if(j<0) break;
+		if(a.substring(0,j)==n) return a.substring(j+1,a.length);
+	}
+	return null;
+}
+
+size=arg("small")?30:40;
+h=window.innerHeight
+if(!h && document.body) h=document.body.clientHeight-10
+if(h && h<13*size+25)
+	size=(h-20)/13;
+if(size<20) size=20;
+size=Math.floor(size);
+size2=size/2;
+y=14*size+100;
+if(h && h>y+10)
+	wr("<table height="+Math.floor((h-y)/2)+"><tr><td></table>");
+if(!location.search)
+	wr("<small>[ <a href=index.html>menu</a> ]<br>");
+imgs="<img width="+size+" height="+size+" src=";
+
+AtoK="ABCDEFGHIJK"
+
+function field(x,y) {
+	if(x<0||x>10||y<0||y>10) return false;
+	return AtoK.charAt(x)+AtoK.charAt(y);
+}
+
+function coordX(n) {return AtoK.indexOf(n.charAt(0));}
+function coordY(n) {return AtoK.indexOf(n.charAt(1));}
+
+function overimg(n)
+{
+	status = msg ? msg : n
+}
+
+function fld(x,y) {
+	var n=field(x,y);
+	wr("<td><a href=JavaScript:putev('"+n+"'); onMouseOver=\"return overimg("+x+"+':'+"+y+")\">"+imgs+"field.gif name="+n+" border=0></a>");
+	document[n].oncontextmenu=refuse
+}
+
+function tdim(n) {
+	wr("<td>"+imgs+n+".gif>");
+}
+
+function tdselev(s,i,n) {
+	wr("<td><a href=javascript:selev('"+s+"',"+i+"); onMouseOver=\"return overimg('quasar')\" onMouseDown='return false'>"+imgs+"plain.gif border=0 name="+s+n+"></a>");
+}
+
+function imrow(n1,n2,n3,k) {
+	wr("<tr>");
+	tdim(n1); 
+	for(x=0;x<k;x++) tdim(n2);
+	tdim(n3);
+}
+
+wr("<br><table border=0 cellpadding=0 cellspacing=0 bgcolor=#404040 background=plain.gif>");
+wr("<tr><td bgcolor=#9A4F37><img src=ul.gif height=6 width=6><td bgcolor=#9A4F37 colspan=13><img src=u.gif height=6 width="+13*size+"><td bgcolor=#9A4F37><img src=ur.gif height=6 width=6>");
+wr("<tr><td bgcolor=#9A4F37 rowspan=13><img src=l.gif width=6 height="+13*size+">");
+for(x=0;x<13;x++) tdim("plain");
+wr("<td bgcolor=#9A4F37 rowspan=13><img src=r.gif width=6 height="+13*size+">");
+wr("<tr>");
+tdselev("R",0,0);
+wr("<td>"+imgs+"plain.gif name=AA>");
+for(x=1;x<10;x++) fld(x,0);
+tdim("plain");
+tdselev("B",0,0);
+
+for(y=1;y<8;y++) {
+	wr("<tr>");
+	tdim("plain");
+	for(x=0;x<11;x++) fld(x,y);
+	tdim("plain");
+	wr("</tr>");
+}
+
+for(;y<10;y++) {
+	wr("<tr>");
+	tdselev("R",1,y);
+	for(x=0;x<11;x++) fld(x,y);
+	tdselev("B",1,y);
+	wr("</tr>");
+}
+
+wr("<tr>");
+tdselev("R",1,10);
+tdim("plain");
+for(x=1;x<10;x++) fld(x,10);
+tdim("plain");
+tdselev("B",1,10);
+
+wr("<tr>");
+for(x=0;x<5;x++) tdim("plain");
+wr("<td colspan=3><img width="+(3*size)+" height="+size+" src=wplain.gif name=stat lowsrc=nic.gif>");
+for(x=0;x<5;x++) tdim("plain");
+
+wr("<tr><td bgcolor=#9A4F37><img src=dl.gif height=6 width=6><td bgcolor=#9A4F37 colspan=13><img src=d.gif height=6 width="+13*size+"><td bgcolor=#9A4F37><img src=dr.gif height=6 width=6>");
+
+wr("</table>");
+
+
+//for MSIE
+if(dyn==2)
+	for(i=0;i<document.links.length;i++)
+		document.links[i].onfocus=Function("document.links["+i+"].blur();")
+
+if(dyn)
+	wr("<div id=quasar>"+imgs+"tquasar.gif></div>");
+//--></script>
+
+<p>
+<font size=-1>Copyright &copy;1998-2002 by <a href=http://wizard.ae.krakow.pl/~jb/>Jan Bobrowski</a><br>
+This program is freely distributable under <a href=http://www.gnu.org/copyleft/gpl.html#SEC1>GNU</a> public license.</font>
+</body>
+
+<script language=JavaScript1.1><!--
+quadSel=true;
+
+function dispSel(s)
+{
+	if(!s) document.R0.src=document.B0.src="plain.gif";
+	else {
+		n=s=="R"?"selred":"selblue";
+		document[s+"0"].src=quadSel?n+"1.gif":n+"2.gif";
+	}
+}
+
+function showq(p,n)
+{
+	var y=10;
+	var t=nquasars_text(n)
+	for(y=10;y>7;y--) {
+	    var i=document[p+y]
+	    i.src=(n>0?"quasar"+(n>1?"2":"1"):"plain")+".gif";
+	    i.title = t
+	    n-=2
+	}
+}
+
+//--></script>
+<script language=JavaScript1.2><!--
+
+function posOf(img)
+{
+	var i=document[img]
+	if(i.x) return {x:i.x,y:i.y};
+	var p={x:0,y:0}
+	for(var o=i;o;o=o.offsetParent) {
+		p.x+=o.offsetLeft
+		p.y+=o.offsetTop
+	}
+	return p
+}
+
+function over(e)
+{
+	var x=e.x-base.x;
+	var y=e.y-base.y;
+	x=Math.floor(x/size);
+	y=Math.floor(y/size);
+	return field(x,y);
+}
+
+function debill(p)
+{
+	var i=(""+p).indexOf("px");
+	return Math.floor(i<0 ? p : p.substr(0,i));
+}
+
+function fqret()
+{
+	if(fq.ph!=3) return;
+	fq.lay.top=debill(fq.lay.top)+fq.dy;
+	fq.lay.left=debill(fq.lay.left)+fq.dx;
+	if(--fq.mv<=0) {
+		fq.lay.visibility="hidden";
+		fq.ph=0;
+		showq(player.id,player.quasars);
+		return;
+	}
+	setTimeout("fqret();",50);
+}
+
+function msieev()
+{
+	var e={
+		x:event.clientX+document.body.scrollLeft,
+		y:event.clientY+document.body.scrollTop,
+		which:event.button
+	}
+	event.cancelBubble=true
+	return e;
+}
+
+function downev(e)
+{
+	var t=true;
+	if(!board) return t;
+	if(!game) {ngev(); return t;}
+	if(!interact) return t;
+	if(window.event) e=msieev();
+	else if(e.pageX) {e.x=e.pageX; e.y=e.pageY}
+	if(e.which>1) {
+		var p=over(e)
+		if(p) put2ev(p)
+		return false;
+	}
+	var p=posOf(player.id+"10");
+	fq.ph=0;
+	fq.lay.visibility="hidden";
+	if(e.x<p.x||e.x>=p.x+size) return t;
+	if(e.y>p.y+size||e.y<p.y-2*size) return t;
+	if(player.quasars>0) fq.ph=1;
+	return t;
+}
+
+function upev(e)
+{
+	if(window.event) e=msieev();
+	else if(e.pageX) {e.x=e.pageX; e.y=e.pageY}
+	with(fq) {
+		if(ph==1) ph=0;
+		if(ph!=2) return;
+		var p=over(e);
+		if( player.putQuasar(p) ) {
+			lay.visibility="hidden";
+			ph=0;
+		} else {
+			ph++;
+			mv=4;
+			var p=posOf(player.id+"10");
+			dx=(p.x+size2-e.x)/mv;
+			dy=(p.y-(player.quasars-2)*size2-e.y)/mv;
+			fqret();
+		}
+		selev(player.id,2);
+	}
+}
+
+function moveev(e)
+{
+	if(window.event) e=msieev()
+	else if(e.pageX) {e.x=e.pageX; e.y=e.pageY}
+	with(fq) {
+		if(ph!=1 && ph!=2) return true;
+		lay.top=e.y-size2;
+		lay.left=e.x-0.7*size;
+		if(fq.ph==2) return false;
+		ph=2;
+		lay.visibility="visible";
+		showq(player.id,player.quasars-1);
+	}
+	return false;
+}
+
+function dragstev()
+{
+	event.returnValue=false
+}
+
+
+if(dyn) {
+	base=posOf("AA");
+
+	fq={mv:0,dx:0,dy:0,ph:0};
+
+	if(document.captureEvents)
+		document.captureEvents(Event.MOUSEDOWN|Event.MOUSEUP|Event.MOUSEMOVE);
+
+	fq.lay=layer('quasar')
+
+	if(window.addEventListener) {
+		window.addEventListener("mouseup", upev, 1)
+		window.addEventListener("mousedown", downev, 1)
+		window.addEventListener("mousemove", moveev, 1)
+		window.addEventListener("dragstart", dragstev, 1)
+	} else {
+		document.onmouseup=document.onMouseUp=upev;
+		document.onmousedown=document.onMouseDown=downev;
+		document.onmousemove=document.onMouseMove=moveev;
+		document.ondragstart=dragstev;
+	}
+}
+
+////////
+
+if(dyn)
+	lines={lays:[],used:0}
+
+function newLineLay(i)
+{
+	var l, s=2*size
+	if(dyn==1) {
+		l=new Layer(s)
+		l.document.write("<img width="+s+" height="+s+" src=nic.gif visibility=hidden>")
+		l.document.close()
+		l.style=l; l.img=l.document.images[0]
+	} else if(dyn==2) {
+		document.body.insertAdjacentHTML('beforeEnd', "<img id=line"+i+" width="+s+" height="+s+" src=nic.gif border=0 style='position:absolute; left:0; top:0; visibility:hidden'>")
+		l=document.all["line"+i]
+		l.img=l
+	} else {
+		l=document.createElement("img")
+		l.style.visibility='hidden'
+		l.style.position='absolute'
+		l.style.width=l.style.height=s
+		l.src='nic.gif'
+		document.getElementsByTagName("body").item(0).appendChild(l)
+		l.img=l
+	}	
+	lines.lays[i]=l;
+}
+
+function line_img(p,img)
+{
+	var l, s=2*size;
+	if(lines.lays.length==lines.used) newLineLay(lines.used)
+		
+	l=lines.lays[lines.used++]
+	l.img.src=img
+	l.style.left=p.x
+	l.style.top=p.y
+	l.style.visibility="visible"
+	l.rel={x:p.x-base.x, y:p.y-base.y}
+	return l
+}
+
+function lines_clear()
+{
+	while(lines.used>0) {
+		var l=lines.lays[--lines.used]
+		l.img.src="nic.gif"
+		l.style.visibility="hidden"
+	}
+}
+
+function mcd(n,m)
+{
+	var r=1
+	for(;;) {
+		if(n>m) {var b=n;n=m;m=b}
+		if(n==0) return m
+		if(n<=1) break
+		if(n==m) return r*n
+		var k=(n&1),l=(m&1)
+		if(k) {
+			if(l) m-=n
+			else m/=2
+		} else {
+			n/=2
+			if(!l) {m/=2; r*=2}
+		}
+	}
+	return r
+}
+
+function line(a,b)
+{
+	var p,x,y,ax,ay,n,v
+	if(a>b) {var c=a;a=b;b=c}
+	x=coordX(b)-coordX(a)
+	y=coordY(b)-coordY(a)
+	p=posOf(a)
+	ax=(x<0?-x:x); ay=(y<0?-y:y)
+	n=(ax<ay?ay:ax)
+	v=mcd(ax,ay)
+	ax/=v; ay/=v
+	if(ax>5||ay>5) {
+		if(ax>5) ax=7
+		if(ay>5) ay=7
+	}
+	v="line/"+ax+ay+"du".charAt(y<0)+".gif"
+	if(y<0) p.y-=size
+	x*=size/n; y*=size/n
+	for(var i=0;i<n;i++) {
+		line_img(p,v)
+		p.x+=x; p.y+=y
+	}
+}
+
+//--></script>
+<script src=loc.js charset=iso-8859-2></script>
+<script language=JavaScript1.1><!--
+
+function Board()
+{
+	this.fields=new Object();
+	for(var x=0;x<11;x++)
+		for(var y=0;y<11;y++)
+			if((x!=0&&x!=10)||(y!=0&&y!=10))
+				this.fields[field(x,y)]=" ";
+	this.add=add;
+	this.pieces=new Object();
+	this.pieces["R"]=new Object();
+	this.pieces["B"]=new Object();
+	this.pieces["q"]=new Object();
+	this.marked=new Object();
+	this.isWinner=isWinner;
+	this.checkQuad=checkQuad;
+	this.mark=board_mark;
+	this.unmark=board_unmark;
+	this.at=board_at;
+	this.clear=board_clear;
+	this.refresh=board_refr;
+}
+
+function add(n,c)
+{
+	if(this.fields[n]!=" ") return false;
+	this.fields[n]=c;
+	this.pieces[c][n]=true;
+	document[n].src=pic[c].src;
+	if(c=="q") return true;
+	this.unmark()
+	this.mark(n)
+	return true;
+}
+
+function board_at(x,y)
+{
+	var n=field(x,y);
+	if(!n) return false;
+	return this.fields[n];
+}
+
+function board_clear()
+{
+	showq("R",0); showq("B",0);
+	if(lines) lines_clear()
+	for(p in this.pieces) if(n) // Opera bug!
+		for(n in this.pieces[p]) if(n)
+			document[n].src="field.gif";
+}
+
+function board_refr()
+{
+	for(var p in this.pieces)
+		for(var n in this.pieces[p])
+			document[n].src=pic[p].src;
+}
+
+function checkQuad(a,b,l)
+{
+	if(a>=b) return false
+	var ax=coordX(a),ay=coordY(a),bx=coordX(b),by=coordY(b)
+	var c=field(bx-by+ay,by+bx-ax)
+	if(!c || c<a || !l[c]) return false
+	var d=field(ax-by+ay,ay+bx-ax)
+	if(!d || d<a || !l[d]) return false
+	this.mark(a)
+	this.mark(b)
+	this.mark(c)
+	this.mark(d)
+	if(lines) {line(a,b); line(b,c); line(c,d); line(d,a)}
+	return true;
+}
+
+function isWinner(i)
+{
+	var l=this.pieces[i];
+	var a,b,r=false;
+	for(b in l)
+		for(a in l)
+			r|=this.checkQuad(a,b,l);
+	return r;
+}
+
+function board_mark(n)
+{
+	var v=this.fields[n];
+	document[n].src=pic["m"+v].src
+	this.marked[n]=n
+}
+
+function board_unmark()
+{
+	var m=this.marked
+	for(var n in m)
+		if(n) // Opera 3.60 bug!
+			document[n].src=pic[this.fields[n]].src;
+	this.marked = new Object()
+}
+
+////////////////
+
+function Player(id,type,board)
+{
+	this.id=id;
+	this.board=board;
+	this.type=type;
+	this.quasars=6;
+	this.quads=20;
+	showq(id,6);
+	if(type) {
+		this.move=humanMove;
+	} else {
+		this.move=aiMove;
+	}
+	this.putQuad=putQuad;
+	this.putQuasar=putQuasar;
+}
+
+function humanMove()
+{
+	dispSel(this.id);
+	return 1;
+}
+
+function aiMove()
+{
+	setTimeout("aiMove2();",100);
+	return 0;
+}
+
+function aiMove2()
+{
+	do_move()
+	turn(false)
+}
+
+function putQuad(n)
+{
+	this.board.add(n,this.id);
+	this.quads--;
+}
+
+function putQuasar(n)
+{
+	if(this.quasars<=0) return false;
+	var q=this.board.add(n,"q");
+	if(q) showq(this.id,--this.quasars);
+	return q;
+}
+
+////////////////
+
+big=1000;
+
+function addList(l,x,y,s)
+{
+	var n=field(x,y);
+	if(l[n]) l[n]+=s;
+	else l[n]=s;
+}
+
+function pair(cx,cy,dx,dy,p,l)
+{
+	var u=board.at(cx,cy);
+	var v=board.at(dx,dy);
+	if(!u||!v) return;
+	if(u==" "&&v==" ") {
+		addList(l,cx,cy,1);
+		addList(l,dx,dy,1);
+		return;
+	}
+	if(u==p) {
+		if(v!=" ") return;
+		addList(l,dx,dy,big);
+		return;
+	}
+	if(v==p) {
+		if(u!=" ") return;
+		addList(l,cx,cy,big);
+	}
+}
+
+function important(p)
+{
+	var l=new Object();
+	for(var a in board.pieces[p])
+		for(var b in board.pieces[p])
+			if(a<b) {
+				var ax=coordX(a), ay=coordY(a);
+				var bx=coordX(b), by=coordY(b);
+				var vx=by-ay, vy=ax-bx;
+				pair(ax+vx,ay+vy,bx+vx,by+vy,p,l);
+				pair(ax-vx,ay-vy,bx-vx,by-vy,p,l);
+				if((vx+vy)%2==0) {
+					var gx=(ax+bx+vx)/2, gy=(ay+by+vy)/2;
+					pair(gx,gy,gx-vx,gy-vy,p,l);
+				}
+			}
+	return l;
+}
+
+function hasCritical(l)
+{
+	for(var o in l) if(l[o]>=big) return true;
+	return false;
+}
+
+function nonempty(l)
+{
+	for(var o in l) return true;
+	return false;
+}
+
+function chkAttack(my,his,pl)
+{
+	var m=-1,b;
+	for(var a in his) if(his[a]>=big) {
+		var v=0;
+		if(my[a]) v=my[a];
+		if(v>m) {b=a; m=v;}
+	}
+	if(m<0) return false;
+	for(var a in his) if(a!=b&&his[a]>=big) pl.putQuasar(a);
+	pl.putQuad(b);
+	return true;
+}
+
+function chkImportant(my,his)
+{
+	var m=-1,b;
+	for(var a in my) {
+		var v=my[a];
+		if(his[a]) v+=his[a];
+		if(v>m) {m=v;b=a;}
+	}
+	for(var a in his) {
+		var v=his[a];
+		if(my[a]) v+=my[a];
+		if(v>m) {m=v;b=a;}
+	}
+	if(m<0) return false;
+	return b;
+}
+
+function do_move()
+{
+	var p=player, my=important(p.id), a;
+	if(hasCritical(my)) {
+		for(a in my) if(my[a]>=big)
+			{p.putQuad(a); return}
+	}
+	var his=important(p.opponent.id);
+	if( chkAttack(my,his,p) ) return;
+	a=chkImportant(my,his);
+	if(a) {
+		p.putQuad(a);
+		return;
+	}
+	while(1) {
+		a=field(Math.floor(Math.random()*11),
+			Math.floor(Math.random()*11));
+		if(!board.fields[a]) continue;
+		if(board.fields[a]==" ") break;
+	}
+	p.putQuad(a);
+}
+
+function nothing() {}
+
+////////////////
+
+function turn(f)
+{
+	if(!f) {
+		dispSel(null);
+		if( board.isWinner(player.id) ) {endGame(1); return;}
+		var opp=player.opponent
+		if(player.quads+opp.quads<=0) {
+			var n=player.quasars-opp.quasars
+			if(!n) {endGame(0); return}
+			if(n<0) player=opp
+			endGame(1)
+			return
+		}
+		player=opp;
+	}
+	interact=player.move();
+}
+
+function newGame()
+{
+	if(game) return;
+	board=new Board();
+
+	redfirst=!arg("bluefirst");
+	plfirst=!!arg("plfirst");
+	HvsH=("HvsH"==arg("type"));
+
+	player1=new Player("R",HvsH||redfirst==plfirst,board);
+	player2=new Player("B",HvsH||redfirst!=plfirst,board);
+	player1.opponent=player2;
+	player2.opponent=player1;
+
+	player=redfirst?player1:player2;
+	game=true;
+	msg=""
+	turn(true);
+}
+
+function flashStat(v,g)
+{
+	document.stat.src=(v%2)?"wplain.gif":g;
+	if(v) flashId=setTimeout("flashStat("+--v+",'"+g+"');",100);
+	else {
+		flashId=null;
+		if(lines)
+			flashId=setTimeout("board.unmark()", 1000);
+	}
+}
+
+endimg = new Object();
+endimg[1] = "youlose"
+endimg[2] = "youwin"
+endimg[3] = "redwins"
+endimg[4] = "bluewins"
+
+function endGame(v)
+{
+	game=false;
+	interact=true;
+	var r=0
+	if(v) {
+		r = HvsH ? (player.id!="R")+2 : player.type;
+		flashStat(7,endimg[++r]+".gif")
+	} else
+		alert(texts[0]);
+	status = msg = texts[r]
+}
+
+if(ok) {
+	setTimeout("newGame();",600);
+}
+
+loaded=true;
+
+//--></script>
+<script language=JavaScript1.2><!--
+(new Image()).src="tquasar.gif"
+for(i in endimg) (new Image()).src=endimg[i]+".gif"
+//--></script>
+</html>
