@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pixel (JS Canvas edition)</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#f5f5f5; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .wrap { display:flex; flex-direction:column; align-items:center; gap:10px; padding:14px; }
+    canvas { background:#f5f5f5; border-radius:14px; box-shadow:0 8px 24px rgba(0,0,0,0.12); touch-action: manipulation; }
+    .hud { width:min(980px, 96vw); background:white; border-radius:14px; box-shadow:0 6px 18px rgba(0,0,0,0.08); padding:12px 14px; }
+    .hud .title { font-weight:700; margin-bottom:6px; }
+    .hud .line { color:#222; margin:3px 0; }
+    .hud .muted { color:#555; }
+    .hud .msg { margin-top:8px; padding:8px 10px; border-radius:10px; background:#f0f7ff; color:#0b3a66; display:none; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    button { border:none; background:#222; color:white; padding:8px 12px; border-radius:10px; cursor:pointer; }
+    button.secondary { background:#666; }
+    kbd { background:#eee; border-radius:6px; padding:2px 6px; font-size:0.9em; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud" id="hud">
+      <div class="title" id="hudTitle">Pixel (JS Canvas edition)</div>
+      <div class="line muted" id="hudLine1"></div>
+      <div class="line muted" id="hudLine2"></div>
+      <div class="line muted" id="hudLine3"></div>
+      <div class="msg" id="hudMsg"></div>
+      <div class="row" style="margin-top:10px;">
+        <button id="btnRestart" class="secondary">Restart</button>
+        <span class="muted">Keys: <kbd>2</kbd>/<kbd>3</kbd>/<kbd>4</kbd> to pick players, <kbd>Esc</kbd> to quit (close tab)</span>
+      </div>
+    </div>
+
+    <canvas id="cv" width="800" height="800" aria-label="Pixel board"></canvas>
+    <div class="row" id="pickRow" style="margin-top:10px; display:none;">
+      <span class="muted">Start:</span>
+      <button id="btn2">2 Players</button>
+      <button id="btn3">3 Players</button>
+      <button id="btn4">4 Players</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // -----------------------------
+  // Constants
+  // -----------------------------
+  const BOARD_N = 8;
+
+  // dynamic sizing
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+
+  const hudTitle = document.getElementById('hudTitle');
+  const hudLine1 = document.getElementById('hudLine1');
+  const hudLine2 = document.getElementById('hudLine2');
+  const hudLine3 = document.getElementById('hudLine3');
+  const hudMsg   = document.getElementById('hudMsg');
+  const btnRestart = document.getElementById('btnRestart');
+  const pickRow = document.getElementById('pickRow');
+  const btn2 = document.getElementById('btn2');
+  const btn3 = document.getElementById('btn3');
+  const btn4 = document.getElementById('btn4');
+
+  btn2.addEventListener('click', () => startGame(2));
+  btn3.addEventListener('click', () => startGame(3));
+  btn4.addEventListener('click', () => startGame(4));
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  // -----------------------------
+  // Game state
+  // -----------------------------
+  let pan = null;      // 8x8: 0 empty, -1 blocked, 1..4 stones
+  let players = null;  // 2/3/4
+  let phase = "pick_players"; // "pick_players" | "first_moves" | "main" | "over"
+  let tx = null, ty = null;   // crosshair col,row (0-index)
+  let current_player = 1;
+  let first_move_next_player = 2;
+  let total_turns = 0;
+  let msg = "";
+  let winner_text = "";
+
+  // -----------------------------
+  // Helpers: colors / names (ported)
+  // -----------------------------
+  function colorassign(n, d=4) {
+    if ((n-1) % d === 0) return [220, 20, 60];      // red
+    if ((n-2) % d === 0) return [30, 144, 255];     // blue
+    if ((n-3) % d === 0) return [255, 140, 0];      // orange
+    if ((n-4) % d === 0) return [255, 215, 0];      // yellow
+    return [0,0,0];
+  }
+  function colorsutza(n, d=4) {
+    // original: players 1,2 white; 3,4 black
+    const k = (n-1) % d;
+    return (k === 0 || k === 1) ? [255,255,255] : [0,0,0];
+  }
+  function playername(n, d=4) {
+    if ((n-1) % d === 0) return "Red";
+    if ((n-2) % d === 0) return "Blue";
+    if ((n-3) % d === 0) return "Orange";
+    if ((n-4) % d === 0) return "Yellow";
+    return "Black";
+  }
+
+  // -----------------------------
+  // Board init
+  // -----------------------------
+  function make_initial_board() {
+    const b = Array.from({length: BOARD_N}, () => Array(BOARD_N).fill(0));
+    b[0][0] = -1;
+    b[0][BOARD_N-1] = -1;
+    b[BOARD_N-1][0] = -1;
+    b[BOARD_N-1][BOARD_N-1] = -1;
+    return b;
+  }
+
+  // -----------------------------
+  // Count logic (ported)
+  // -----------------------------
+  function count4(pan, n) {
+    let count = 0;
+    const N = BOARD_N;
+    for (let i=0;i<N;i++) {
+      for (let j=0;j<N-3;j++) {
+        if ([0,1,2,3].every(k => pan[i][j+k] === n)) count++;
+        if ([0,1,2,3].every(k => pan[j+k][i] === n)) count++;
+      }
+    }
+    for (let i=0;i<N-3;i++) {
+      for (let j=0;j<N-3;j++) {
+        if ([0,1,2,3].every(k => pan[i+k][j+k] === n)) count++;
+        if ([0,1,2,3].every(k => pan[i+3-k][j+k] === n)) count++;
+      }
+    }
+    return count;
+  }
+  function count3(pan, n) {
+    let count = 0;
+    const N = BOARD_N;
+    for (let i=0;i<N;i++) {
+      for (let j=0;j<N-2;j++) {
+        if ([0,1,2].every(k => pan[i][j+k] === n)) count++;
+        if ([0,1,2].every(k => pan[j+k][i] === n)) count++;
+      }
+    }
+    for (let i=0;i<N-2;i++) {
+      for (let j=0;j<N-2;j++) {
+        if ([0,1,2].every(k => pan[i+k][j+k] === n)) count++;
+        if ([0,1,2].every(k => pan[i+2-k][j+k] === n)) count++;
+      }
+    }
+    return count;
+  }
+  function count2(pan, n) {
+    let count = 0;
+    const N = BOARD_N;
+    for (let i=0;i<N;i++) {
+      for (let j=0;j<N-1;j++) {
+        if (pan[i][j] === n && pan[i][j+1] === n) count++;
+        if (pan[j][i] === n && pan[j+1][i] === n) count++;
+      }
+    }
+    for (let i=0;i<N-1;i++) {
+      for (let j=0;j<N-1;j++) {
+        if (pan[i][j] === n && pan[i+1][j+1] === n) count++;
+        if (pan[i+1][j] === n && pan[i][j+1] === n) count++;
+      }
+    }
+    return count;
+  }
+  function row_full(pan, r) {
+    for (let c=0;c<BOARD_N;c++) if (pan[r][c] === 0) return false;
+    return true;
+  }
+  function col_full(pan, c) {
+    for (let r=0;r<BOARD_N;r++) if (pan[r][c] === 0) return false;
+    return true;
+  }
+
+  // -----------------------------
+  // Layout / coordinate transform
+  // -----------------------------
+  function computeLayout() {
+    const vw = Math.min(980, Math.floor(window.innerWidth * 0.96));
+    const size = clamp(vw, 320, 920);      // canvas square size
+    cv.width = size;
+    cv.height = size;
+    const margin = Math.floor(size * 0.06);
+    const cell = Math.floor((size - margin*2) / BOARD_N);
+    const boardPx = cell * BOARD_N;
+    const ox = Math.floor((size - boardPx)/2);
+    const oy = Math.floor((size - boardPx)/2);
+    return { size, margin, cell, ox, oy, boardPx };
+  }
+  let layout = computeLayout();
+  window.addEventListener('resize', () => { layout = computeLayout(); draw(); });
+
+  function to_screen(r, c) {
+    const { ox, oy, cell } = layout;
+    return { x: ox + c*cell, y: oy + r*cell };
+  }
+  function from_mouse(mx, my) {
+    const { ox, oy, cell, boardPx } = layout;
+    if (mx < ox || my < oy) return null;
+    const c = Math.floor((mx - ox) / cell);
+    const r = Math.floor((my - oy) / cell);
+    if (0 <= r && r < BOARD_N && 0 <= c && c < BOARD_N) return { r, c };
+    return null;
+  }
+
+  // -----------------------------
+  // UI / messages
+  // -----------------------------
+  function setMsg(s) {
+    msg = s || "";
+    if (msg) {
+      hudMsg.style.display = "block";
+      hudMsg.textContent = msg;
+    } else {
+      hudMsg.style.display = "none";
+      hudMsg.textContent = "";
+    }
+  }
+
+  function end_game(text) {
+    phase = "over";
+    winner_text = text;
+    setMsg("Game over. Click or press any key to exit/restart.");
+  }
+
+  // -----------------------------
+  // Game init
+  // -----------------------------
+  function startPickPlayers() {
+    players = null;
+    pan = null;
+    phase = "pick_players";
+    tx = ty = null;
+    current_player = 1;
+    first_move_next_player = 2;
+    total_turns = 0;
+    winner_text = "";
+    setMsg("Press 2 / 3 / 4 to choose number of players.");
+    pickRow.style.display = "flex";   //
+    draw();
+  }
+
+  function startGame(p) {
+    pickRow.style.display = "none";
+    players = p;
+    pan = make_initial_board();
+
+    // original: tx=3, ty=4 (0-index) and pan[ty][tx]=1
+    tx = 3; ty = 4;
+    pan[ty][tx] = 1;
+
+    total_turns = 1;
+    winner_text = "";
+    setMsg("");
+
+    if (players > 1) {
+      phase = "first_moves";
+      first_move_next_player = 2;
+      current_player = 2;
+    } else {
+      phase = "main";
+      current_player = 1;
+    }
+    draw();
+  }
+
+  // -----------------------------
+  // Rendering
+  // -----------------------------
+  function draw() {
+    const { size, cell } = layout;
+    ctx.clearRect(0,0,size,size);
+
+    // background
+    ctx.fillStyle = "#f5f5f5";
+    ctx.fillRect(0,0,size,size);
+
+    // HUD lines
+    if (phase === "pick_players") {
+      hudTitle.textContent = "Pixel (JS Canvas edition)";
+      hudLine1.textContent = "How many players? Press 2 / 3 / 4.";
+      hudLine2.textContent = "Opening: each player’s first stone must be placed in the central 2×2.";
+      hudLine3.textContent = "Main: place in same row OR column as the crosshair (not both).";
+      // simple prompt on canvas
+      ctx.fillStyle = "#222";
+      ctx.font = `${Math.floor(size*0.04)}px system-ui`;
+      ctx.textAlign = "center";
+      ctx.fillText("Press 2 / 3 / 4 to start", size/2, size/2);
+      return;
+    }
+
+    hudTitle.textContent = `${players}-player Pixel (JS)`;
+    hudLine1.textContent = `Turn: ${playername(current_player, players)} (${current_player})`;
+    if (phase === "first_moves") {
+      hudLine2.textContent = "Opening move: each player must place their first stone inside the central 2×2 (D4,D5,E4,E5).";
+      hudLine3.textContent = "";
+    } else if (phase === "main") {
+      hudLine2.textContent = "Main game: You can only place a stone in the same row OR column as the crosshair (not both).";
+      hudLine3.textContent = "If both the row and column are completely filled, you may move the crosshair without placing.";
+    } else {
+      hudLine2.textContent = winner_text.split("\n")[0] || "Game Over";
+      hudLine3.textContent = "Click or press any key to restart.";
+    }
+
+    // draw board
+    for (let r=0;r<BOARD_N;r++) {
+      for (let c=0;c<BOARD_N;c++) {
+        const {x,y} = to_screen(r,c);
+        const center = (r>=3 && r<=4 && c>=3 && c<=4);
+
+        // tile
+        let tile = ((r+c)%2===0) ? "#e6e6e6" : "#d7d7d7";
+        if (pan[r][c] === -1) tile = "#1e1e1e";
+        ctx.fillStyle = tile;
+        ctx.fillRect(x,y,cell,cell);
+
+        // central emphasis
+        if (pan[r][c] !== -1 && center) {
+          ctx.strokeStyle = "#228b22";
+          ctx.lineWidth = (phase === "first_moves") ? Math.max(3, Math.floor(cell*0.06)) : 1;
+          ctx.strokeRect(x+1,y+1,cell-2,cell-2);
+        }
+
+        // grid line
+        ctx.strokeStyle = "#505050";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x,y,cell,cell);
+      }
+    }
+
+    // crosshair highlight
+    if (tx != null && ty != null) {
+      // row
+      for (let c=0;c<BOARD_N;c++) {
+        if (pan[ty][c] !== -1) {
+          const {x,y} = to_screen(ty,c);
+          ctx.strokeStyle = "rgba(144,238,144,0.9)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x+2,y+2,cell-4,cell-4);
+        }
+      }
+      // column
+      for (let r=0;r<BOARD_N;r++) {
+        if (pan[r][tx] !== -1) {
+          const {x,y} = to_screen(r,tx);
+          ctx.strokeStyle = "rgba(144,238,144,0.9)";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x+2,y+2,cell-4,cell-4);
+        }
+      }
+    }
+
+    // stones
+    for (let r=0;r<BOARD_N;r++) {
+      for (let c=0;c<BOARD_N;c++) {
+        const v = pan[r][c];
+        if (v > 0) {
+          const {x,y} = to_screen(r,c);
+          const cx = x + cell/2;
+          const cy = y + cell/2;
+          const radius = cell/2 - Math.max(6, Math.floor(cell*0.10));
+
+          const [rr,gg,bb] = colorassign(v, players);
+          ctx.fillStyle = `rgb(${rr},${gg},${bb})`;
+          ctx.beginPath();
+          ctx.arc(cx,cy,radius,0,Math.PI*2);
+          ctx.fill();
+
+          const [tr,tg,tb] = colorsutza(v, players);
+          ctx.fillStyle = `rgb(${tr},${tg},${tb})`;
+          ctx.font = `${Math.floor(cell*0.36)}px system-ui`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(String(v), cx, cy);
+        }
+      }
+    }
+
+    // overlay when over
+    if (phase === "over") {
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0,0,size,size);
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = `${Math.floor(size*0.05)}px system-ui`;
+
+      const lines = winner_text.split("\n");
+      let y = size/2 - (lines.length-1)*Math.floor(size*0.03);
+      for (const line of lines) {
+        ctx.fillText(line, size/2, y);
+        y += Math.floor(size*0.06);
+      }
+      ctx.font = `${Math.floor(size*0.03)}px system-ui`;
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fillText("Click or press any key → Restart", size/2, y + Math.floor(size*0.04));
+    }
+  }
+
+  // -----------------------------
+  // Game click logic (ported)
+  // -----------------------------
+  function handleCellClick(r, c) {
+    if (phase === "over") {
+      startPickPlayers();
+      return;
+    }
+    if (phase === "pick_players") return;
+
+    if (pan[r][c] === -1) { setMsg("Blocked cell. You cannot place here."); return; }
+
+    // opening
+    if (phase === "first_moves") {
+      if (!(r>=3 && r<=4 && c>=3 && c<=4)) { setMsg("Opening move must be inside the central 2×2 (D4,D5,E4,E5)."); return; }
+      if (pan[r][c] !== 0) { setMsg("That cell is already occupied."); return; }
+
+      pan[r][c] = current_player;
+      tx = c; ty = r;
+      total_turns++;
+
+      if (count4(pan, current_player) >= 1) {
+        end_game(`${playername(current_player, players)} wins with a 4-in-a-row!`);
+        draw(); return;
+      } else if (players === 4 && count3(pan, current_player) >= 1) {
+        end_game(`${playername(current_player, players)} wins with a 3-in-a-row!`);
+        draw(); return;
+      }
+
+      first_move_next_player++;
+      if (first_move_next_player > players) {
+        phase = "main";
+        current_player = players; // align with original
+      } else {
+        current_player = first_move_next_player;
+      }
+      setMsg("");
+      draw();
+      return;
+    }
+
+    // main
+    // must change exactly one axis relative to (tx,ty): same row OR same col
+    if ((c - tx) !== 0 && (r - ty) !== 0) {
+      setMsg("You cannot move both the row and column at the same time.");
+      return;
+    }
+
+    // if both row & col full, allow crosshair move without placing (consumes turn)
+    if (row_full(pan, ty) && col_full(pan, tx)) {
+      tx = c; ty = r;
+      current_player = (current_player % players) + 1;
+      total_turns++;
+      setMsg("Row and column are full. Crosshair moved without placing a stone.");
+      draw();
+      return;
+    }
+
+    // otherwise must be empty to place
+    if (pan[r][c] !== 0) { setMsg("That cell is already occupied."); return; }
+
+    // place
+    pan[r][c] = current_player;
+    tx = c; ty = r;
+    total_turns++;
+
+    // win checks
+    if (count4(pan, current_player) >= 1) {
+      end_game(`${playername(current_player, players)} wins with a 4-in-a-row!`);
+      draw(); return;
+    }
+    if (players === 4 && count3(pan, current_player) >= 1) {
+      end_game(`${playername(current_player, players)} wins with a 3-in-a-row!`);
+      draw(); return;
+    }
+
+    // filled/end check
+    let placeable = 0, stones = 0;
+    for (let rr=0; rr<BOARD_N; rr++) for (let cc=0; cc<BOARD_N; cc++) {
+      if (pan[rr][cc] >= 0) placeable++;
+      if (pan[rr][cc] > 0) stones++;
+    }
+    if (stones >= placeable) {
+      if (players === 4) {
+        const c2 = [count2(pan,1), count2(pan,2), count2(pan,3), count2(pan,4)];
+        const best = Math.max(...c2);
+        const winners = [1,2,3,4].filter(i => c2[i-1] === best);
+        let report = `No player made 3- or 4-in-a-row.\n2-in-a-row count: Red=${c2[0]}, Blue=${c2[1]}, Orange=${c2[2]}, Yellow=${c2[3]}`;
+        if (winners.length === 1) report += `\n${playername(winners[0], players)} wins with the most 2-in-a-row!`;
+        else if (winners.length === 4) report += `\nAll players tied with the same number of 2-in-a-row. Draw!`;
+        else report += `\nJoint winners: ${winners.map(w => playername(w, players)).join(", ")}`;
+        end_game(report);
+      } else if (players === 3) {
+        const c3 = [count3(pan,1), count3(pan,2), count3(pan,3)];
+        const best = Math.max(...c3);
+        const winners = [1,2,3].filter(i => c3[i-1] === best);
+        let report = `No player made 4-in-a-row.\n3-in-a-row count: Red=${c3[0]}, Blue=${c3[1]}, Orange=${c3[2]}`;
+        if (winners.length === 1) report += `\n${playername(winners[0], players)} wins with the most 3-in-a-row!`;
+        else if (winners.length === 3) report += `\nAll players tied with the same number of 3-in-a-row. Draw!`;
+        else report += `\nJoint winners: ${winners.map(w => playername(w, players)).join(", ")}`;
+        end_game(report);
+      } else {
+        const c3 = [count3(pan,1), count3(pan,2)];
+        const best = Math.max(...c3);
+        const winners = [1,2].filter(i => c3[i-1] === best);
+        let report = `No player made 4-in-a-row.\n3-in-a-row count: Red=${c3[0]}, Blue=${c3[1]}`;
+        if (winners.length === 1) report += `\n${playername(winners[0], players)} wins with the most 3-in-a-row!`;
+        else report += `\nBoth players tied with the same number of 3-in-a-row. Draw!`;
+        end_game(report);
+      }
+      draw(); return;
+    }
+
+    // next player
+    current_player = (current_player % players) + 1;
+    setMsg("");
+    draw();
+  }
+
+  // -----------------------------
+  // Events
+  // -----------------------------
+  cv.addEventListener('click', (e) => {
+    const rect = cv.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (cv.width / rect.width);
+    const my = (e.clientY - rect.top) * (cv.height / rect.height);
+    const sel = from_mouse(mx, my);
+    if (!sel) return;
+
+    if (phase === "pick_players") {
+      // ignore; user must press key 2/3/4 (keeps behavior similar)
+      return;
+    }
+    handleCellClick(sel.r, sel.c);
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (phase === "pick_players") {
+      if (e.key === "2" || e.key === "3" || e.key === "4") startGame(parseInt(e.key,10));
+      return;
+    }
+    if (phase === "over") {
+      startPickPlayers();
+      return;
+    }
+    if (e.key === "Escape") {
+      // in browser we can't quit; just restart to pick screen
+      startPickPlayers();
+    }
+  });
+
+  btnRestart.addEventListener('click', () => startPickPlayers());
+
+  // start
+  startPickPlayers();
+})();
+</script>
+</body>
+</html>
