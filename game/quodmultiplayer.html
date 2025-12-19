@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QUOD Multiplayer</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: rgb(250,252,255); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .wrap { display: flex; justify-content: center; align-items: flex-start; padding: 16px; }
+    canvas { border: 0; outline: 0; }
+    .note { max-width: 980px; margin: 0 auto; padding: 0 16px 16px; color: #333; font-size: 14px; }
+    .note code { background: #f2f2f2; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game"></canvas>
+  </div>
+  <div class="note">
+    Controls: <code>Left click</code> place stone · <code>Right click</code> place Quasar (does not consume turn)
+  </div>
+  <script src="./quodmultiplayer.js"></script>
+</body>
+</html>
