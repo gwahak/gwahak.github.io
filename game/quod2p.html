@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>QUOD 2P (qoud2p)</title>
+  <style>
+    html, body { margin:0; padding:0; background:#fafcff; }
+    canvas { display:block; margin:0 auto; background:#fafcff; touch-action: none; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+(() => {
+  // -------------------- Config --------------------
+  const GRID_N = 11;
+  const CELL = 48;
+  const MARGIN = 48;
+  const PANEL_W = 300;
+  const WIDTH = MARGIN * 2 + GRID_N * CELL + PANEL_W;
+  const HEIGHT = MARGIN * 2 + GRID_N * CELL;
+
+  // IDs
+  const EMPTY = 0;
+  const RED = 2;
+  const BLUE = 3;
+  const QUASAR = 7;
+
+  const PLAYER_FILL = {
+    [RED]: [220, 40, 40],
+    [BLUE]: [40, 100, 220],
+    [QUASAR]: [180, 180, 180],
+  };
+  const PLAYER_TEXT = {
+    [RED]: [250, 250, 250],
+    [BLUE]: [250, 250, 250],
+    [QUASAR]: [20, 20, 20],
+  };
+  const PLAYER_NAME = {
+    [RED]: "Red",
+    [BLUE]: "Blue",
+    [QUASAR]: "Quasar",
+  };
+
+  const BG = [250, 252, 255];
+  const GRID = [40, 40, 40];
+  const LBL = [60, 60, 60];
+  const PANEL_BG = [245, 247, 250];
+  const WIN_CLR = [10, 120, 40];
+  const ERR_CLR = [160, 30, 30];
+
+  // Rules
+  const QUODS_PER_PLAYER = 20;
+  const QUASARS_PER_PLAYER = 6;
+  const USE_QUASAR_TIEBREAK = true;
+
+  // -------------------- Canvas --------------------
+  const canvas = document.getElementById("game");
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+  const ctx = canvas.getContext("2d");
+
+  // Prevent context menu on right click
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // -------------------- Helpers --------------------
+  const rgb = (arr) => `rgb(${arr[0]},${arr[1]},${arr[2]})`;
+
+  function gridRect(i, j) {
+    const x = MARGIN + i * CELL;
+    const y = MARGIN + j * CELL;
+    return { x, y, w: CELL, h: CELL };
+  }
+
+  function cellCenter(i, j) {
+    const r = gridRect(i, j);
+    return { cx: r.x + r.w / 2, cy: r.y + r.h / 2 };
+  }
+
+  function colrowFromPos(x, y) {
+    const gx0 = MARGIN, gy0 = MARGIN;
+    const gx1 = MARGIN + GRID_N * CELL, gy1 = MARGIN + GRID_N * CELL;
+    if (!(gx0 <= x && x < gx1 && gy0 <= y && y < gy1)) return null;
+    const i = Math.floor((x - MARGIN) / CELL);
+    const j = Math.floor((y - MARGIN) / CELL);
+    return { i, j };
+  }
+
+  function roundRect(x, y, w, h, r, fill, stroke) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+
+  function drawTextCentered(text, x, y) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x, y);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+
+  function drawGrid() {
+    ctx.strokeStyle = rgb(GRID);
+    ctx.lineWidth = 1;
+    for (let k = 0; k <= GRID_N; k++) {
+      const x = MARGIN + k * CELL;
+      ctx.beginPath();
+      ctx.moveTo(x, MARGIN);
+      ctx.lineTo(x, MARGIN + GRID_N * CELL);
+      ctx.stroke();
+
+      const y = MARGIN + k * CELL;
+      ctx.beginPath();
+      ctx.moveTo(MARGIN, y);
+      ctx.lineTo(MARGIN + GRID_N * CELL, y);
+      ctx.stroke();
+    }
+
+    // axis labels A..K and 1..11
+    ctx.fillStyle = rgb(LBL);
+    ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+
+    for (let i = 0; i < GRID_N; i++) {
+      const ch = String.fromCharCode("A".charCodeAt(0) + i);
+      const tx = MARGIN + i * CELL + CELL / 2;
+      const ty = MARGIN - 20;
+      drawTextCentered(ch, tx, ty);
+    }
+    for (let j = 0; j < GRID_N; j++) {
+      const t = String(j + 1);
+      const tx = MARGIN - 22;
+      const ty = MARGIN + j * CELL + CELL / 2 + 6;
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillText(t, tx, ty);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+    }
+  }
+
+  function drawStone(i, j, label, ownerId) {
+    const { cx, cy } = cellCenter(i, j);
+    const radius = CELL / 2 - 6;
+
+    ctx.fillStyle = rgb(PLAYER_FILL[ownerId]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgb(20,20,20)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = rgb(PLAYER_TEXT[ownerId]);
+    ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    drawTextCentered(label, cx, cy);
+  }
+
+  function wrapText(text, maxW, font) {
+    ctx.font = font;
+    const words = text.split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cur = "";
+    for (const w of words) {
+      const test = (cur ? cur + " " : "") + w;
+      if (ctx.measureText(test).width <= maxW) cur = test;
+      else { if (cur) lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+
+  // -------------------- Game core --------------------
+  function initBoard() {
+    const pan = Array.from({ length: GRID_N }, () => Array(GRID_N).fill(EMPTY));
+    pan[0][0] = QUASAR;
+    pan[GRID_N - 1][0] = QUASAR;
+    pan[0][GRID_N - 1] = QUASAR;
+    pan[GRID_N - 1][GRID_N - 1] = QUASAR;
+    return pan;
+  }
+
+  function count4gon(pan, n) {
+    let count = 0;
+    for (let gg = 1; gg <= 10; gg++) {
+      for (let hh = 0; hh < gg; hh++) {
+        for (let ii = 0; ii < 11 - gg; ii++) {
+          for (let jj = 0; jj < 11 - gg; jj++) {
+            try {
+              if (
+                pan[ii][jj + hh] === n &&
+                pan[ii + hh][jj + gg] === n &&
+                pan[ii + gg - hh][jj] === n &&
+                pan[ii + gg][jj + gg - hh] === n
+              ) count += 1;
+            } catch {}
+          }
+        }
+      }
+    }
+    return count;
+  }
+
+  function maybeEndByQuads() {
+    if (state.mode !== "playing") return;
+    if (state.quadsLeft[RED] === 0 && state.quadsLeft[BLUE] === 0) {
+      state.mode = "gameover";
+      if (USE_QUASAR_TIEBREAK) {
+        const redRem = QUASARS_PER_PLAYER - state.usedQuasar[RED];
+        const blueRem = QUASARS_PER_PLAYER - state.usedQuasar[BLUE];
+        if (redRem > blueRem) {
+          state.winner = RED;
+          state.message = "Both ran out of quads. Red has more quasars left. Red wins!";
+        } else if (blueRem > redRem) {
+          state.winner = BLUE;
+          state.message = "Both ran out of quads. Blue has more quasars left. Blue wins!";
+        } else {
+          state.winner = null;
+          state.message = "Both ran out of quads. Quasars left are equal. Draw.";
+        }
+      } else {
+        state.winner = null;
+        state.message = "Both ran out of quads. Tie-break is OFF. Draw.";
+      }
+      state.msgIsError = false;
+    }
+  }
+
+  // -------------------- AI (ported same structure as your python) --------------------
+  const BIG = 1000;
+
+  function addList(map, x, y, s) {
+    if (0 <= x && x < GRID_N && 0 <= y && y < GRID_N) {
+      const k = `${x},${y}`;
+      map.set(k, (map.get(k) || 0) + s);
+    }
+  }
+
+  function pairCells(pan, cx, cy, dx, dy, p, accum) {
+    const val = (x, y) => (0 <= x && x < GRID_N && 0 <= y && y < GRID_N) ? pan[x][y] : null;
+    const u = val(cx, cy), v = val(dx, dy);
+    if (u === null || v === null) return;
+
+    if (u === EMPTY && v === EMPTY) {
+      addList(accum, cx, cy, 1);
+      addList(accum, dx, dy, 1);
+      return;
+    }
+    if (u === p) {
+      if (v !== EMPTY) return;
+      addList(accum, dx, dy, BIG);
+      return;
+    }
+    if (v === p) {
+      if (u !== EMPTY) return;
+      addList(accum, cx, cy, BIG);
+    }
+  }
+
+  function important(pan, p) {
+    const stones = [];
+    for (let x = 0; x < GRID_N; x++) for (let y = 0; y < GRID_N; y++) {
+      if (pan[x][y] === p) stones.push([x, y]);
+    }
+
+    const l = new Map();
+    for (let i = 0; i < stones.length; i++) {
+      const [ax, ay] = stones[i];
+      for (let j = i + 1; j < stones.length; j++) {
+        const [bx, by] = stones[j];
+        const vx = (by - ay);
+        const vy = (ax - bx);
+
+        pairCells(pan, ax + vx, ay + vy, bx + vx, by + vy, p, l);
+        pairCells(pan, ax - vx, ay - vy, bx - vx, by - vy, p, l);
+
+        if (((vx + vy) % 2) === 0) {
+          const gx = Math.floor((ax + bx + vx) / 2);
+          const gy = Math.floor((ay + by + vy) / 2);
+          pairCells(pan, gx, gy, gx - vx, gy - vy, p, l);
+        }
+      }
+    }
+    return l; // Map "x,y" -> score
+  }
+
+  function hasCritical(accum) {
+    for (const sc of accum.values()) if (sc >= BIG) return true;
+    return false;
+  }
+
+  function chkAttack(pan, my, his, me, usedQuasar) {
+    const criticals = [];
+    for (const [k, sc] of his.entries()) {
+      if (sc >= BIG) {
+        const [x, y] = k.split(",").map(Number);
+        if (pan[x][y] === EMPTY) criticals.push([x, y, k]);
+      }
+    }
+    if (criticals.length === 0) return { best: null, quasarTargets: [] };
+
+    // best = critical position that maximizes my[pos]
+    let best = criticals[0];
+    let bestScore = (my.get(best[2]) || 0);
+    for (const c of criticals) {
+      const s = (my.get(c[2]) || 0);
+      if (s > bestScore) { best = c; bestScore = s; }
+    }
+
+    const quasarTargets = [];
+    for (const c of criticals) {
+      const [x, y, key] = c;
+      if (key === best[2]) continue;
+      if (usedQuasar[me] < QUASARS_PER_PLAYER) {
+        quasarTargets.push([x, y]);
+        usedQuasar[me] += 1; // reserve (same as python)
+      }
+    }
+    return { best: [best[0], best[1]], quasarTargets };
+  }
+
+  function chkImportant(my, his) {
+    let best = null;
+    let bestScore = -1;
+
+    for (const [k, sc] of my.entries()) {
+      const s = sc + (his.get(k) || 0);
+      if (s > bestScore) { best = k; bestScore = s; }
+    }
+    for (const [k, sc] of his.entries()) {
+      const s = sc + (my.get(k) || 0);
+      if (s > bestScore) { best = k; bestScore = s; }
+    }
+    if (!best) return null;
+    return best.split(",").map(Number);
+  }
+
+  function aiTakeTurn() {
+    const me = state.pid;
+    const opp = (me === RED) ? BLUE : RED;
+
+    // If no quads left, AI can only do nothing meaningful; just end via maybeEndByQuads guard.
+    if (state.quadsLeft[me] <= 0) {
+      maybeEndByQuads();
+      return;
+    }
+
+    // 1) immediate win
+    const my = important(pan, me);
+    if (hasCritical(my)) {
+      for (const [k, sc] of my.entries()) {
+        if (sc >= BIG) {
+          const [x, y] = k.split(",").map(Number);
+          if (pan[x][y] === EMPTY) {
+            pan[x][y] = me;
+            state.moveNo += 1;
+            moveLabels.set(`${x},${y}`, { label: String(state.moveNo), owner: me });
+            state.quadsLeft[me] -= 1;
+            return;
+          }
+        }
+      }
+    }
+
+    // 2) block opponent + place stone, maybe place quasars
+    const his = important(pan, opp);
+    const usedCopy = { [RED]: state.usedQuasar[RED], [BLUE]: state.usedQuasar[BLUE] };
+    const { best, quasarTargets } = chkAttack(pan, my, his, me, usedCopy);
+
+    // commit reserved quasars actually placed (but only into empty cells)
+    for (const [qx, qy] of quasarTargets) {
+      if (state.usedQuasar[me] >= QUASARS_PER_PLAYER) break;
+      if (pan[qx][qy] === EMPTY) {
+        pan[qx][qy] = QUASAR;
+        moveLabels.set(`${qx},${qy}`, { label: "Q", owner: QUASAR });
+        state.usedQuasar[me] += 1;
+      }
+    }
+
+    if (best && pan[best[0]][best[1]] === EMPTY) {
+      const [x, y] = best;
+      pan[x][y] = me;
+      state.moveNo += 1;
+      moveLabels.set(`${x},${y}`, { label: String(state.moveNo), owner: me });
+      state.quadsLeft[me] -= 1;
+      return;
+    }
+
+    // 3) best important
+    const a = chkImportant(my, his);
+    if (a && pan[a[0]][a[1]] === EMPTY) {
+      const [x, y] = a;
+      pan[x][y] = me;
+      state.moveNo += 1;
+      moveLabels.set(`${x},${y}`, { label: String(state.moveNo), owner: me });
+      state.quadsLeft[me] -= 1;
+      return;
+    }
+
+    // 4) random
+    const empties = [];
+    for (let i = 0; i < GRID_N; i++) for (let j = 0; j < GRID_N; j++) {
+      if (pan[i][j] === EMPTY) empties.push([i, j]);
+    }
+    if (empties.length) {
+      const [x, y] = empties[(Math.random() * empties.length) | 0];
+      pan[x][y] = me;
+      state.moveNo += 1;
+      moveLabels.set(`${x},${y}`, { label: String(state.moveNo), owner: me });
+      state.quadsLeft[me] -= 1;
+    }
+  }
+
+  // -------------------- Menu widgets (canvas-drawn radios) --------------------
+  class Toggle {
+    constructor(rect, label, group, value=false) {
+      this.rect = rect;      // {x,y,w,h}
+      this.label = label;
+      this.group = group;
+      this.value = value;
+    }
+    draw() {
+      ctx.fillStyle = "rgb(230,234,240)";
+      roundRect(this.rect.x, this.rect.y, this.rect.w, this.rect.h, 8, true, false);
+      ctx.strokeStyle = "rgb(180,185,195)";
+      roundRect(this.rect.x, this.rect.y, this.rect.w, this.rect.h, 8, false, true);
+
+      // dot
+      const cx = this.rect.x + 16;
+      const cy = this.rect.y + this.rect.h/2;
+      ctx.fillStyle = "rgb(200,200,205)";
+      ctx.beginPath(); ctx.arc(cx, cy, 9, 0, Math.PI*2); ctx.fill();
+      if (this.value) {
+        ctx.fillStyle = "rgb(60,60,80)";
+        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2); ctx.fill();
+      }
+
+      ctx.fillStyle = this.value ? "rgb(30,30,40)" : "rgb(120,120,130)";
+      ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(this.label, this.rect.x + 32, cy);
+      ctx.textBaseline = "alphabetic";
+    }
+    hit(x,y) {
+      return (x >= this.rect.x && x <= this.rect.x + this.rect.w &&
+              y >= this.rect.y && y <= this.rect.y + this.rect.h);
+    }
+  }
+
+  function makeMenuToggles(panelX, y0) {
+    const toggles = [];
+    const x0 = panelX + 16;
+    let y = y0;
+
+    const modes = ["Human vs Human", "Human vs AI", "AI vs Human", "AI vs AI"];
+    modes.forEach((lab, idx) => {
+      toggles.push(new Toggle({x:x0, y, w: 220, h: 32}, lab, "mode", idx===1)); // default Human vs AI
+      y += 40;
+    });
+
+    y += 12;
+    ["Red first", "Blue first"].forEach((lab, idx) => {
+      toggles.push(new Toggle({x:x0, y, w: 220, h: 32}, lab, "first", idx===0)); // default Red first
+      y += 40;
+    });
+
+    const startBtn = { x:x0, y:y+8, w: 140, h: 36 };
+    return { toggles, startBtn };
+  }
+
+  function readMenu(toggles) {
+    let mode = "Human vs AI";
+    let first = RED;
+    for (const t of toggles) {
+      if (t.group === "mode" && t.value) mode = t.label;
+      if (t.group === "first" && t.value) first = (t.label.includes("Red")) ? RED : BLUE;
+    }
+    let isHuman;
+    if (mode === "Human vs Human") isHuman = { [RED]: true,  [BLUE]: true  };
+    else if (mode === "Human vs AI") isHuman = { [RED]: true,  [BLUE]: false };
+    else if (mode === "AI vs Human") isHuman = { [RED]: false, [BLUE]: true  };
+    else isHuman = { [RED]: false, [BLUE]: false };
+    return { isHuman, first, modeLabel: mode };
+  }
+
+  // -------------------- State --------------------
+  let pan = initBoard();
+  const moveLabels = new Map(); // "i,j" -> {label, owner}
+  for (const [i, j] of [[0,0],[GRID_N-1,0],[0,GRID_N-1],[GRID_N-1,GRID_N-1]]) {
+    moveLabels.set(`${i},${j}`, { label: "Q", owner: QUASAR });
+  }
+
+  const state = {
+    mode: "menu", // 'menu'|'playing'|'gameover'
+    pid: RED,
+    isHuman: { [RED]: true, [BLUE]: false }, // default Human vs AI
+    first: RED,
+    modeLabel: "Human vs AI",
+    quadsLeft: { [RED]: QUODS_PER_PLAYER, [BLUE]: QUODS_PER_PLAYER },
+    usedQuasar: { [RED]: 0, [BLUE]: 0 },
+    moveNo: 0,
+    message: "",
+    msgIsError: false,
+    winner: null,
+
+    hover: null,
+    quasarMode: false,
+
+    // buttons (panel)
+    quasarButton: null,
+    restartButton: null,
+    newGameButton: null,
+
+    // menu widgets
+    menuToggles: [],
+    startButton: null,
+
+    // ai pacing
+    aiCooldown: 0,
+  };
+
+  function resetToMenu() {
+    state.mode = "menu";
+    state.message = "";
+    state.msgIsError = false;
+    state.winner = null;
+    state.hover = null;
+    state.quasarMode = false;
+
+    // keep default selection visually as currently set in toggles
+    // (we will rebuild toggles each draw anyway)
+  }
+
+  function startGameWithConfig(isHuman, first, modeLabel) {
+    pan = initBoard();
+    moveLabels.clear();
+    for (const [i, j] of [[0,0],[GRID_N-1,0],[0,GRID_N-1],[GRID_N-1,GRID_N-1]]) {
+      moveLabels.set(`${i},${j}`, { label: "Q", owner: QUASAR });
+    }
+
+    state.isHuman = { [RED]: !!isHuman[RED], [BLUE]: !!isHuman[BLUE] };
+    state.first = first;
+    state.modeLabel = modeLabel;
+
+    state.pid = first;
+    state.quadsLeft = { [RED]: QUODS_PER_PLAYER, [BLUE]: QUODS_PER_PLAYER };
+    state.usedQuasar = { [RED]: 0, [BLUE]: 0 };
+    state.moveNo = 0;
+
+    state.mode = "playing";
+    state.message = "Game started.";
+    state.msgIsError = false;
+    state.winner = null;
+
+    state.quasarMode = false;
+    state.aiCooldown = 0;
+  }
+
+  function restartSameMode() {
+    // same isHuman + same first (as requested)
+    startGameWithConfig(state.isHuman, state.first, state.modeLabel);
+    state.message = "Restarted.";
+    state.msgIsError = false;
+  }
+
+  // -------------------- Panel drawing (same structure as your multiplayer layout) --------------------
+  function drawPanel() {
+    const panelX = MARGIN + GRID_N * CELL;
+    ctx.fillStyle = rgb(PANEL_BG);
+    ctx.fillRect(panelX, 0, PANEL_W, HEIGHT);
+
+    const x0 = panelX + 16;
+    let y = MARGIN;
+
+    ctx.fillStyle = "rgb(30,30,30)";
+    ctx.font = "bold 18px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+
+    if (state.mode === "menu") {
+      ctx.fillText("QUOD — Options (2P)", x0, y);
+      y += 36;
+
+      ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillStyle = "rgb(50,50,60)";
+      const tip = [
+        "Choose Human/AI and who goes first.",
+        "Then press Start.",
+        "",
+        "Mobile tip:",
+        "Use Quasar Mode during play."
+      ];
+      for (const line of tip) {
+        ctx.fillText(line, x0, y);
+        y += 22;
+      }
+
+      // Menu widgets are rendered here too
+      for (const t of state.menuToggles) t.draw();
+
+      const b = state.startButton;
+      if (b) {
+        ctx.fillStyle = "rgb(230,234,240)";
+        roundRect(b.x, b.y, b.w, b.h, 10, true, false);
+        ctx.strokeStyle = "rgb(180,185,195)";
+        roundRect(b.x, b.y, b.w, b.h, 10, false, true);
+
+        ctx.fillStyle = "rgb(30,30,40)";
+        ctx.font = "bold 15px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+        drawTextCentered("Start", b.x + b.w/2, b.y + b.h/2 + 1);
+      }
+      return;
+    }
+
+    // playing / gameover
+    ctx.fillText("QUOD (2 Players)", x0, y);
+    y += 32;
+
+    ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillStyle = "rgb(50,50,60)";
+
+    const turnTag = state.isHuman[state.pid] ? "(Human)" : "(AI)";
+    const lines = [
+      `Mode: ${state.modeLabel}`,
+      `Turn: ${PLAYER_NAME[state.pid]} ${turnTag}`,
+      `Red Quads Left:  ${state.quadsLeft[RED]} / ${QUODS_PER_PLAYER}`,
+      `Blue Quads Left: ${state.quadsLeft[BLUE]} / ${QUODS_PER_PLAYER}`,
+      `Red Quasars:  ${state.usedQuasar[RED]}/${QUASARS_PER_PLAYER}`,
+      `Blue Quasars: ${state.usedQuasar[BLUE]}/${QUASARS_PER_PLAYER}`,
+      "",
+      "Controls:",
+      "- Left click: place stone",
+      "- Right click: place Quasar",
+      "",
+      "Quasar does NOT consume the turn.",
+    ];
+
+    for (const line of lines) {
+      ctx.fillText(line, x0, y);
+      y += 22;
+    }
+
+    // --- Quasar toggle button (mobile-friendly) ---
+    const btnX = x0;
+    const btnY = y + 6;
+    const btnW = 240;
+    const btnH = 36;
+
+    state.quasarButton = { x: btnX, y: btnY, w: btnW, h: btnH };
+
+    ctx.fillStyle = state.quasarMode ? "rgb(255,235,200)" : "rgb(230,234,240)";
+    roundRect(btnX, btnY, btnW, btnH, 10, true, false);
+    ctx.strokeStyle = state.quasarMode ? "rgb(180,120,60)" : "rgb(180,185,195)";
+    roundRect(btnX, btnY, btnW, btnH, 10, false, true);
+
+    ctx.fillStyle = "rgb(30,30,40)";
+    ctx.font = "bold 15px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    drawTextCentered(`Quasar Mode: ${state.quasarMode ? "ON" : "OFF"}`, btnX + btnW/2, btnY + btnH/2 + 1);
+
+    ctx.font = "13px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillStyle = "rgb(90,90,100)";
+    ctx.fillText("Tap board to place Quasar when ON.", x0, btnY + btnH + 18);
+
+    // --- Row of two buttons: Restart / New Game ---
+    const rowY = btnY + btnH + 34;
+    const gap = 10;
+    const smallW = Math.floor((btnW - gap) / 2);
+    const smallH = 32;
+
+    const rBtn = { x: x0, y: rowY, w: smallW, h: smallH };
+    const nBtn = { x: x0 + smallW + gap, y: rowY, w: smallW, h: smallH };
+
+    state.restartButton = rBtn;
+    state.newGameButton = nBtn;
+
+    // Restart
+    ctx.fillStyle = "rgb(230,234,240)";
+    roundRect(rBtn.x, rBtn.y, rBtn.w, rBtn.h, 10, true, false);
+    ctx.strokeStyle = "rgb(180,185,195)";
+    roundRect(rBtn.x, rBtn.y, rBtn.w, rBtn.h, 10, false, true);
+    ctx.fillStyle = "rgb(30,30,40)";
+    ctx.font = "bold 14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    drawTextCentered("Restart", rBtn.x + rBtn.w/2, rBtn.y + rBtn.h/2 + 1);
+
+    // New Game
+    ctx.fillStyle = "rgb(230,234,240)";
+    roundRect(nBtn.x, nBtn.y, nBtn.w, nBtn.h, 10, true, false);
+    ctx.strokeStyle = "rgb(180,185,195)";
+    roundRect(nBtn.x, nBtn.y, nBtn.w, nBtn.h, 10, false, true);
+    ctx.fillStyle = "rgb(30,30,40)";
+    ctx.font = "bold 14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    drawTextCentered("New Game", nBtn.x + nBtn.w/2, nBtn.y + nBtn.h/2 + 1);
+
+    // message area start
+    y = rowY + smallH + 16;
+
+    if (state.message) {
+      ctx.fillStyle = state.msgIsError ? rgb(ERR_CLR) : "rgb(40,40,40)";
+      const font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      const wrapped = wrapText(state.message, PANEL_W - 32, font);
+      ctx.font = font;
+      for (const w of wrapped) {
+        ctx.fillText(w, x0, y);
+        y += 20;
+      }
+    }
+
+    if (state.mode === "gameover") {
+      y += 10;
+      ctx.fillStyle = rgb(WIN_CLR);
+      ctx.font = "bold 18px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText("Game Over", x0, y);
+      y += 28;
+
+      ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      if (state.winner != null) {
+        ctx.fillStyle = "rgb(20,100,30)";
+        ctx.fillText(`Winner: ${PLAYER_NAME[state.winner]}`, x0, y);
+      } else {
+        ctx.fillStyle = "rgb(80,80,80)";
+        ctx.fillText("Result: Draw", x0, y);
+      }
+    }
+  }
+
+  // -------------------- Input --------------------
+  function toCanvasXY(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    return { x, y };
+  }
+
+  function insideRect(x, y, r) {
+    return r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+canvas.addEventListener("mousedown", (e) => {
+  const { x, y } = toCanvasXY(e);
+
+  // --- MENU interactions ---
+  if (state.mode === "menu" && e.button === 0) {
+    for (const t of state.menuToggles) {
+      if (t.hit(x, y)) {
+        for (const u of state.menuToggles) if (u.group === t.group) u.value = false;
+        t.value = true;
+        return;
+      }
+    }
+    if (insideRect(x, y, state.startButton)) {
+      const { isHuman, first, modeLabel } = readMenu(state.menuToggles);
+      startGameWithConfig(isHuman, first, modeLabel);
+      return;
+    }
+    return;
+  }
+
+  // --- PANEL buttons (allow in playing AND gameover) ---
+  const panelActive = (state.mode === "playing" || state.mode === "gameover");
+  if (panelActive && e.button === 0) {
+    if (insideRect(x, y, state.quasarButton) && state.mode === "playing") {
+      // (선택) gameover에선 굳이 토글 못하게
+      state.quasarMode = !state.quasarMode;
+      state.message = state.quasarMode ? "Quasar mode ON." : "Quasar mode OFF.";
+      state.msgIsError = false;
+      return;
+    }
+    if (insideRect(x, y, state.restartButton)) {
+      restartSameMode();
+      return;
+    }
+    if (insideRect(x, y, state.newGameButton)) {
+      resetToMenu();
+      // 메뉴 위젯 다시 생성되게
+      state.menuToggles = [];
+      state.startButton = null;
+      return;
+    }
+  }
+
+  // --- If not playing, nothing else to do ---
+  if (state.mode !== "playing") return;
+
+  // --- Board input only during human turn ---
+  if (!state.isHuman[state.pid]) return;
+
+  const cell = colrowFromPos(x, y);
+  if (!cell) return;
+  const { i, j } = cell;
+
+  if (pan[i][j] !== EMPTY) {
+    state.message = "That cell is already occupied.";
+    state.msgIsError = true;
+    return;
+  }
+
+  const wantQuasar = (e.button === 2) || state.quasarMode;
+
+  if (wantQuasar) {
+    if (state.usedQuasar[state.pid] >= QUASARS_PER_PLAYER) {
+      state.message = "No quasars left.";
+      state.msgIsError = true;
+      return;
+    }
+    pan[i][j] = QUASAR;
+    moveLabels.set(`${i},${j}`, { label: "Q", owner: QUASAR });
+    state.usedQuasar[state.pid] += 1;
+
+    state.message = "Quasar placed. Your turn continues.";
+    state.msgIsError = false;
+    state.quasarMode = false;
+    return;
+  }
+
+  if (state.quadsLeft[state.pid] <= 0) {
+    state.message = "No quads left.";
+    state.msgIsError = true;
+    return;
+  }
+
+  pan[i][j] = state.pid;
+  state.moveNo += 1;
+  moveLabels.set(`${i},${j}`, { label: String(state.moveNo), owner: state.pid });
+  state.quadsLeft[state.pid] -= 1;
+
+  if (count4gon(pan, state.pid) >= 1) {
+    state.mode = "gameover";
+    state.winner = state.pid;
+    state.message = `${PLAYER_NAME[state.pid]} wins!`;
+    state.msgIsError = false;
+    return;
+  }
+
+  maybeEndByQuads();
+  if (state.mode !== "playing") return;
+
+  state.pid = (state.pid === RED) ? BLUE : RED;
+  state.message = "";
+  state.msgIsError = false;
+  state.aiCooldown = 0;
+});
+
+
+  // -------------------- Render Loop --------------------
+  function render() {
+    // background
+    ctx.fillStyle = rgb(BG);
+    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    // grid
+    drawGrid();
+
+    // hover highlight (only if human turn)
+    if (state.mode === "playing" && state.isHuman[state.pid] && state.hover) {
+      const { i, j } = state.hover;
+      if (0 <= i && i < GRID_N && 0 <= j && j < GRID_N && pan[i][j] === EMPTY) {
+        const r = gridRect(i, j);
+        ctx.strokeStyle = "rgb(210,225,250)";
+        ctx.lineWidth = 3;
+        roundRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 8, false, true);
+        ctx.lineWidth = 1;
+      }
+    }
+
+    // stones
+    for (let i = 0; i < GRID_N; i++) {
+      for (let j = 0; j < GRID_N; j++) {
+        const v = pan[i][j];
+        if (v !== EMPTY) {
+          const info = moveLabels.get(`${i},${j}`);
+          if (info) drawStone(i, j, info.label, info.owner);
+          else drawStone(i, j, (v === QUASAR ? "Q" : ""), v);
+        }
+      }
+    }
+
+    // corner frames
+    ctx.strokeStyle = "rgb(80,80,80)";
+    for (const [i, j] of [[0,0],[GRID_N-1,0],[0,GRID_N-1],[GRID_N-1,GRID_N-1]]) {
+      const r = gridRect(i, j);
+      roundRect(r.x + 2, r.y + 2, r.w - 4, r.h - 4, 8, false, true);
+    }
+
+    // Panel
+    const panelX = MARGIN + GRID_N * CELL;
+
+    // Build menu widgets positions once (keeps deterministic layout)
+    if (state.mode === "menu" && state.menuToggles.length === 0) {
+      const menu = makeMenuToggles(panelX, Math.floor(HEIGHT / 2) - 120);
+      state.menuToggles = menu.toggles;
+      state.startButton = menu.startBtn;
+    }
+
+    drawPanel();
+
+    // AI turn pacing
+    if (state.mode === "playing" && !state.isHuman[state.pid]) {
+      state.aiCooldown += 1;
+      if (state.aiCooldown >= 8) {
+        aiTakeTurn();
+
+        // Win by QUOD?
+        if (count4gon(pan, state.pid) >= 1) {
+          state.mode = "gameover";
+          state.winner = state.pid;
+          state.message = `${PLAYER_NAME[state.pid]} (AI) wins!`;
+          state.msgIsError = false;
+        } else {
+          maybeEndByQuads();
+          if (state.mode === "playing") {
+            state.pid = (state.pid === RED) ? BLUE : RED;
+            state.message = "";
+            state.msgIsError = false;
+            state.aiCooldown = 0;
+          }
+        }
+      }
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  // Start
+  render();
+})();
+</script>
+</body>
+</html>
