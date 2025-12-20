@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>BuffaloChess (HTML5)</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #f8f8f8; }
+    canvas { display: block; margin: 0 auto; background: #f8f8f8; touch-action: none; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+(() => {
+  // -------------------- Game Config --------------------
+  const FILES = "abcdefghijk";  // 11 columns
+  const RANKS = "7654321";      // 7 rows (top=7, bottom=1)
+  const W = 11, H = 7;
+
+  const CELL = 72;
+  const MARGIN = 40;
+  const PANEL_W = 260;
+  const WIDTH  = MARGIN * 2 + W * CELL + PANEL_W;
+  const HEIGHT = MARGIN * 2 + H * CELL;
+  const FPS = 60;
+
+  // pieces
+  const EMPTY = 0, WP = 1, BQ = 2, BK = 3;
+  const WHITE_TURN = 0, BLACK_TURN = 1;
+
+  // zones
+  const RIVER_ROWS = new Set([0, 6]); // rank7(row0), rank1(row6)
+
+  // -------------------- Colors --------------------
+  const BG = [248,248,248];
+  const PANEL_BG = [240,240,240];
+  const TEXT = [25,25,25];
+
+  // checkboard
+  const CHK_LIGHT = [255,255,255];
+  const CHK_DARK  = [250,200,150];
+
+  // rivers (dark/light alternating)
+  const RIV_DARK  = [12,45,120];
+  const RIV_LIGHT = [70,140,220];
+
+  // outlines / highlights
+  const GRID_LINE = [165,165,165];
+  const SELECT = [20,20,20];
+  const MOVE_HINT = [30,180,60];
+
+  // piece colors
+  const WHITE_PIECE = [245,245,245];
+  const BLACK_PIECE = [30,30,30];
+
+  // -------------------- Canvas setup --------------------
+  const canvas = document.getElementById("game");
+  canvas.width = WIDTH;
+  canvas.height = HEIGHT;
+  const ctx = canvas.getContext("2d");
+
+  function rgb(a){ return `rgb(${a[0]},${a[1]},${a[2]})`; }
+
+  // -------------------- Helpers --------------------
+  function inside(r,c){ return (0 <= r && r < H && 0 <= c && c < W); }
+
+  function sq_to_rc(sq){
+    const file_ch = sq[0];
+    const rank_ch = sq[1];
+    const c = FILES.indexOf(file_ch);
+    const r = RANKS.indexOf(rank_ch);
+    return [r,c];
+  }
+
+  function river_forbidden(r){ return RIVER_ROWS.has(r); }
+
+  function make_initial_board(){
+    const b = Array.from({length:H}, () => Array(W).fill(EMPTY));
+    // White pawns at a1..k1 => row6
+    for(let c=0;c<W;c++) b[6][c]=WP;
+
+    // Black queens: d6 e6 g6 h6 (rank6 => row1)
+    ["d6","e6","g6","h6"].forEach(sq=>{
+      const [r,c]=sq_to_rc(sq);
+      b[r][c]=BQ;
+    });
+
+    // Black king: f6
+    {
+      const [r,c]=sq_to_rc("f6");
+      b[r][c]=BK;
+    }
+    return b;
+  }
+
+  const DIRS_8 = [
+    [-1,0],[0,1],[1,0],[0,-1],
+    [-1,1],[-1,-1],[1,1],[1,-1]
+  ];
+
+  function gen_moves(board, turn){
+    const moves = [];
+    if(turn === WHITE_TURN){
+      for(let r=0;r<H;r++){
+        for(let c=0;c<W;c++){
+          if(board[r][c] === WP){
+            const nr=r-1, nc=c;
+            if(inside(nr,nc) && board[nr][nc] === EMPTY){
+              moves.push([r,c,nr,nc]);
+            }
+          }
+        }
+      }
+    } else {
+      for(let r=0;r<H;r++){
+        for(let c=0;c<W;c++){
+          const p = board[r][c];
+          if(p === BQ){
+            // Queen slides, cannot enter rivers, cannot capture
+            for(const [dr,dc] of DIRS_8){
+              let nr=r+dr, nc=c+dc;
+              while(inside(nr,nc)){
+                if(river_forbidden(nr)) break;
+                if(board[nr][nc] !== EMPTY) break;
+                moves.push([r,c,nr,nc]);
+                nr += dr; nc += dc;
+              }
+            }
+          } else if(p === BK){
+            // King steps 1, cannot enter rivers, can capture WP
+            for(const [dr,dc] of DIRS_8){
+              const nr=r+dr, nc=c+dc;
+              if(!inside(nr,nc)) continue;
+              if(river_forbidden(nr)) continue;
+              const dst = board[nr][nc];
+              if(dst === EMPTY || dst === WP){
+                moves.push([r,c,nr,nc]);
+              }
+            }
+          }
+        }
+      }
+    }
+    return moves;
+  }
+
+  function apply_move(board, mv){
+    const [r0,c0,r1,c1] = mv;
+    const p = board[r0][c0];
+    board[r0][c0] = EMPTY;
+    board[r1][c1] = p;
+  }
+
+  function check_outcome(board, turn){
+    // White wins if any pawn reaches top river row0
+    for(let c=0;c<W;c++){
+      if(board[0][c] === WP) return "WHITE_WIN";
+    }
+    // Black wins if no pawns remain
+    let anyPawn=false;
+    for(let r=0;r<H;r++){
+      for(let c=0;c<W;c++){
+        if(board[r][c]===WP){ anyPawn=true; break; }
+      }
+      if(anyPawn) break;
+    }
+    if(!anyPawn) return "BLACK_WIN";
+
+    // White loses if stalemated on White's turn
+    if(turn === WHITE_TURN){
+      if(gen_moves(board, WHITE_TURN).length === 0) return "WHITE_LOSE_STALEMATE";
+    }
+    return null;
+  }
+
+  // -------------------- UI: button --------------------
+  function draw_button(rect, label, enabled=true){
+    const col = enabled ? [220,220,220] : [235,235,235];
+    const border = [120,120,120];
+
+    // rounded rect
+    const r = 10;
+    ctx.beginPath();
+    ctx.moveTo(rect.x+r, rect.y);
+    ctx.arcTo(rect.x+rect.w, rect.y, rect.x+rect.w, rect.y+rect.h, r);
+    ctx.arcTo(rect.x+rect.w, rect.y+rect.h, rect.x, rect.y+rect.h, r);
+    ctx.arcTo(rect.x, rect.y+rect.h, rect.x, rect.y, r);
+    ctx.arcTo(rect.x, rect.y, rect.x+rect.w, rect.y, r);
+    ctx.closePath();
+
+    ctx.fillStyle = rgb(col);
+    ctx.fill();
+    ctx.strokeStyle = rgb(border);
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = enabled ? "rgb(30,30,30)" : "rgb(140,140,140)";
+    ctx.font = "22px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, rect.x + rect.w/2, rect.y + rect.h/2);
+  }
+
+  // -------------------- Drawing --------------------
+  function draw_board(board, selected, legalDests){
+    ctx.fillStyle = rgb(BG);
+    ctx.fillRect(0,0,WIDTH,HEIGHT);
+
+    const bx = MARGIN, by = MARGIN;
+
+    // squares
+    for(let r=0;r<H;r++){
+      for(let c=0;c<W;c++){
+        const x = bx + c*CELL;
+        const y = by + r*CELL;
+
+        let col;
+        if(RIVER_ROWS.has(r)){
+          col = (c%2===0) ? RIV_DARK : RIV_LIGHT;
+        } else {
+          col = ((r+c)%2===0) ? CHK_DARK : CHK_LIGHT;
+        }
+        ctx.fillStyle = rgb(col);
+        ctx.fillRect(x,y,CELL,CELL);
+
+        // move hints
+        if(legalDests.has(r*100 + c)){
+          ctx.strokeStyle = rgb(MOVE_HINT);
+          ctx.lineWidth = 4;
+          ctx.strokeRect(x+2,y+2,CELL-4,CELL-4);
+        }
+
+        // selection outline
+        if(selected && selected[0]===r && selected[1]===c){
+          ctx.strokeStyle = rgb(SELECT);
+          ctx.lineWidth = 4;
+          ctx.strokeRect(x+2,y+2,CELL-4,CELL-4);
+        }
+
+        // grid line
+        ctx.strokeStyle = rgb(GRID_LINE);
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x,y,CELL,CELL);
+      }
+    }
+
+    // pieces
+    for(let r=0;r<H;r++){
+      for(let c=0;c<W;c++){
+        const p = board[r][c];
+        if(p===EMPTY) continue;
+
+        const cx = bx + c*CELL + CELL/2;
+        const cy = by + r*CELL + CELL/2;
+        const rad = Math.floor(CELL*0.34);
+
+        if(p===WP){
+          ctx.fillStyle = rgb(WHITE_PIECE);
+          ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle = "rgb(90,90,90)";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.stroke();
+
+          ctx.fillStyle = "rgb(20,20,20)";
+          ctx.font = "34px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.textAlign="center"; ctx.textBaseline="middle";
+          ctx.fillText("P", cx, cy);
+        } else if(p===BQ){
+          ctx.fillStyle = rgb(BLACK_PIECE);
+          ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle = "rgb(200,200,200)";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.stroke();
+
+          ctx.fillStyle = "rgb(240,240,240)";
+          ctx.font = "34px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.textAlign="center"; ctx.textBaseline="middle";
+          ctx.fillText("Q", cx, cy);
+        } else if(p===BK){
+          ctx.fillStyle = rgb(BLACK_PIECE);
+          ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.fill();
+          ctx.strokeStyle = "rgb(200,200,200)";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(cx,cy,rad,0,Math.PI*2); ctx.stroke();
+
+          ctx.fillStyle = "rgb(240,240,240)";
+          ctx.font = "34px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+          ctx.textAlign="center"; ctx.textBaseline="middle";
+          ctx.fillText("K", cx, cy);
+        }
+      }
+    }
+
+    // board rect for click logic
+    return {x:bx, y:by, w:W*CELL, h:H*CELL};
+  }
+
+  function draw_panel(turn, outcome){
+    const px = MARGIN + W*CELL;
+    const py = MARGIN;
+
+    ctx.fillStyle = rgb(PANEL_BG);
+    ctx.fillRect(px,py,PANEL_W,H*CELL);
+    ctx.strokeStyle = "rgb(180,180,180)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px,py,PANEL_W,H*CELL);
+
+    let y = py + 16;
+
+    ctx.fillStyle = rgb(TEXT);
+    ctx.font = "32px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("BuffaloChess", px+16, y);
+    y += 44;
+
+    const turnText = (turn===WHITE_TURN) ? "Turn: WHITE (Pawns)" : "Turn: BLACK (K/Q)";
+    ctx.font = "22px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillText(turnText, px+16, y);
+    y += 38;
+
+    const lines = [
+      "WHITE: Pawns move 1 step up.",
+      "  Win if any pawn reaches top river.",
+      "  Lose if stalemated on White's turn.",
+      "BLACK: Moves only in middle 11x5.",
+      "  King captures; Queen cannot capture."
+    ];
+
+    ctx.fillStyle = "rgb(50,50,50)";
+    ctx.font = "18px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    for(const ln of lines){
+      ctx.fillText(ln, px+16, y);
+      y += 22;
+    }
+
+    y += 10;
+    if(outcome){
+      let msg;
+      if(outcome==="WHITE_WIN") msg = "WHITE WINS (reached river)!";
+      else if(outcome==="BLACK_WIN") msg = "BLACK WINS (all pawns captured)!";
+      else msg = "WHITE LOSES (stalemated)!";
+
+      ctx.fillStyle = "rgb(160,20,20)";
+      ctx.font = "18px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.fillText(msg, px+16, y);
+    }
+  }
+
+  // -------------------- State --------------------
+  let board = make_initial_board();
+  let turn = WHITE_TURN;
+  let outcome = null;
+
+  let selected = null;           // [r,c] or null
+  let legalDests = new Set();    // encode as r*100+c
+  let cachedMoves = [];
+
+  const btnRestart = {
+    x: MARGIN + W*CELL + 16,
+    y: MARGIN + H*CELL - 70,
+    w: PANEL_W - 32,
+    h: 46
+  };
+
+  function recache(){
+    cachedMoves = gen_moves(board, turn);
+  }
+
+  function resetGame(){
+    board = make_initial_board();
+    turn = WHITE_TURN;
+    outcome = null;
+    selected = null;
+    legalDests = new Set();
+    recache();
+  }
+
+  recache();
+
+  // -------------------- Input --------------------
+  function getMousePos(ev){
+    const rect = canvas.getBoundingClientRect();
+    const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+    return {x, y};
+  }
+
+  function pointInRect(x,y,r){
+    return (r.x <= x && x <= r.x + r.w && r.y <= y && y <= r.y + r.h);
+  }
+
+  canvas.addEventListener("mousedown", (ev) => {
+    const {x:mx, y:my} = getMousePos(ev);
+
+    // restart
+    if(pointInRect(mx,my,btnRestart)){
+      resetGame();
+      return;
+    }
+
+    // ignore moves after end
+    if(outcome) return;
+
+    // board click?
+    const boardRect = {x:MARGIN, y:MARGIN, w:W*CELL, h:H*CELL};
+    if(!pointInRect(mx,my,boardRect)) return;
+
+    const c = Math.floor((mx - MARGIN)/CELL);
+    const r = Math.floor((my - MARGIN)/CELL);
+    if(!inside(r,c)) return;
+
+    // destination click
+    if(selected && legalDests.has(r*100 + c)){
+      const [r0,c0] = selected;
+      let chosen = null;
+      for(const mv of cachedMoves){
+        if(mv[0]===r0 && mv[1]===c0 && mv[2]===r && mv[3]===c){
+          chosen = mv; break;
+        }
+      }
+      if(chosen){
+        apply_move(board, chosen);
+        turn = (turn===WHITE_TURN) ? BLACK_TURN : WHITE_TURN;
+        selected = null;
+        legalDests = new Set();
+        recache();
+      }
+      return;
+    }
+
+    // select piece
+    const p = board[r][c];
+    if(turn===WHITE_TURN && p===WP){
+      selected = [r,c];
+    } else if(turn===BLACK_TURN && (p===BQ || p===BK)){
+      selected = [r,c];
+    } else {
+      selected = null;
+      legalDests = new Set();
+      return;
+    }
+
+    // compute legal dests for selected
+    legalDests = new Set();
+    if(selected){
+      const [r0,c0] = selected;
+      for(const mv of cachedMoves){
+        if(mv[0]===r0 && mv[1]===c0){
+          legalDests.add(mv[2]*100 + mv[3]);
+        }
+      }
+    }
+  });
+
+  // touch support (tap = click)
+  canvas.addEventListener("touchstart", (ev) => {
+    ev.preventDefault();
+    const t = ev.changedTouches[0];
+    canvas.dispatchEvent(new MouseEvent("mousedown", {
+      clientX: t.clientX,
+      clientY: t.clientY,
+      bubbles: true
+    }));
+  }, {passive:false});
+
+  window.addEventListener("keydown", (ev) => {
+    if(ev.key === "r" || ev.key === "R") resetGame();
+  });
+
+  // -------------------- Loop --------------------
+  function tick(){
+    if(!outcome){
+      outcome = check_outcome(board, turn);
+    }
+
+    const boardRect = draw_board(board, selected, legalDests);
+    draw_panel(turn, outcome);
+    draw_button(btnRestart, "Restart (R)", true);
+
+    requestAnimationFrame(tick);
+  }
+
+  tick();
+})();
+</script>
+</body>
+</html>
