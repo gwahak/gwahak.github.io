@@ -479,8 +479,41 @@ canvas.addEventListener("mousedown", (e) => {
     return;
   }
 
-  // Ignore clicks when not playing
-  if (state.mode !== "playing") return;
+// Allow panel buttons in both playing & gameover
+const panelClickable = (state.mode === "playing" || state.mode === "gameover");
+
+// Quasar toggle (only meaningful while playing, but harmless)
+if (panelClickable && state.quasarButton && e.button === 0) {
+  const b = state.quasarButton;
+  if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+    // (선택) gameover에서는 토글 막고 싶으면 if(state.mode!=="playing") return; 추가
+    state.quasarMode = !state.quasarMode;
+    state.message = state.quasarMode ? "Quasar mode ON." : "Quasar mode OFF.";
+    state.msgIsError = false;
+    return;
+  }
+}
+
+// Restart (same player count)
+if (panelClickable && state.restartButton && e.button === 0) {
+  const b = state.restartButton;
+  if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+    if (players != null) resetGameForPlayers(players);
+    return;
+  }
+}
+
+// New Game (back to menu)
+if (panelClickable && state.newGameButton && e.button === 0) {
+  const b = state.newGameButton;
+  if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+    goToMenu();
+    return;
+  }
+}
+
+// Ignore other clicks when not playing
+if (state.mode !== "playing") return;
 
   // Click panel button? (Quasar toggle)
   if (state.quasarButton && e.button === 0) {
