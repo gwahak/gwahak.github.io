@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Trexo (Domino Gomoku) — HTML5</title>
+  <style>
+    html, body { margin:0; padding:0; background:#f5f5f5; }
+    canvas { display:block; margin:0 auto; background:#f5f5f5; touch-action:none; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+(() => {
+  // -------------------- Config --------------------
+  const GRID_SIZE = 10;
+  const CELL = 56;
+  const MARGIN = 40;
+  const PANEL_W = 300;
+
+  const W = MARGIN*2 + GRID_SIZE*CELL + PANEL_W;
+  const H = MARGIN*2 + GRID_SIZE*CELL;
+
+  const canvas = document.getElementById("game");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+
+  const FPS = 60;
+
+  // Colors
+  const WHITE = [245,245,245];
+  const BLACK = [24,24,24];
+  const GRAY = [200,200,200];
+  const LIGHT_GRAY = [225,225,225];
+  const DARK = [40,40,40];
+  const RED = [230,70,70];
+  const BLUE = [60,120,230];
+  const GREEN = [60,180,120];
+  const ORANGE = [255,150,60];
+  const YELLOW = [255,210,70];
+  const SEAM_GOOD = [60,180,120];
+  const SEAM_BAD = [220,80,80];
+
+  // Players
+  const PLAYER_O = "O";
+  const PLAYER_X = "X";
+
+  // Orientation: 0:E,1:S,2:W,3:N
+  const EAST=0, SOUTH=1, WEST=2, NORTH=3;
+
+  function rgb(a){ return `rgb(${a[0]},${a[1]},${a[2]})`; }
+  function rgba(a, alpha){ return `rgba(${a[0]},${a[1]},${a[2]},${alpha})`; }
+
+  // -------------------- Utility --------------------
+  function inside(r,c){ return 0<=r && r<GRID_SIZE && 0<=c && c<GRID_SIZE; }
+
+  function cellRect(r,c){
+    return { x: MARGIN + c*CELL + 1, y: MARGIN + r*CELL + 1, w: CELL-2, h: CELL-2 };
+  }
+
+  function pointInRect(x,y,rc){
+    return rc.x <= x && x <= rc.x+rc.w && rc.y <= y && y <= rc.y+rc.h;
+  }
+
+  function roundedRectPath(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath();
+  }
+
+  // -------------------- Core data structures --------------------
+  class Placement {
+    constructor(pid, cells, symbols){
+      this.pid = pid;         // int
+      this.cells = cells;     // [[r1,c1],[r2,c2]]
+      this.symbols = symbols; // ["O","X"] etc
+    }
+  }
+
+  class Board {
+    constructor(n){
+      this.n = n;
+      // symbol stacks per cell
+      this.symbol_stacks = Array.from({length:n}, () => Array.from({length:n}, () => []));
+      this.pid_stacks = Array.from({length:n}, () => Array.from({length:n}, () => []));
+      this.placements = new Map(); // pid -> Placement
+      this.next_pid = 1;
+    }
+
+    height(r,c){ return this.symbol_stacks[r][c].length; }
+    top_symbol(r,c){
+      const s = this.symbol_stacks[r][c];
+      return s.length ? s[s.length-1] : null;
+    }
+
+    can_place_ground(cells){
+      return cells.every(([r,c]) => this.height(r,c) === 0);
+    }
+
+    can_place_stack(cells){
+      const [r0,c0] = cells[0];
+      const h0 = this.height(r0,c0);
+      if(h0 === 0) return false;
+      for(const [r,c] of cells){
+        if(this.height(r,c) !== h0) return false;
+      }
+      const [[r1,c1],[r2,c2]] = cells;
+      const pidA = this.pid_stacks[r1][c1][h0-1];
+      const pidB = this.pid_stacks[r2][c2][h0-1];
+      return pidA !== pidB;
+    }
+
+    can_place(cells){
+      return this.can_place_ground(cells) || this.can_place_stack(cells);
+    }
+
+    place(cells, symbols){
+      const pid = this.next_pid++;
+      const plc = new Placement(pid, cells, symbols);
+      this.placements.set(pid, plc);
+      for(let i=0;i<2;i++){
+        const [r,c] = cells[i];
+        const sym = symbols[i];
+        this.symbol_stacks[r][c].push(sym);
+        this.pid_stacks[r][c].push(pid);
+      }
+      return pid;
+    }
+
+    place_with_pid(pid, cells, symbols){
+      let plc = this.placements.get(pid);
+      if(!plc){
+        plc = new Placement(pid, cells, symbols);
+        this.placements.set(pid, plc);
+      } else {
+        plc.cells = cells;
+        plc.symbols = symbols;
+      }
+      for(let i=0;i<2;i++){
+        const [r,c] = cells[i];
+        const sym = symbols[i];
+        this.symbol_stacks[r][c].push(sym);
+        this.pid_stacks[r][c].push(pid);
+      }
+      if(this.next_pid <= pid) this.next_pid = pid+1;
+    }
+
+    has_exact_five(sym){
+      // top layer
+      const top = Array.from({length:this.n}, (_,r) =>
+        Array.from({length:this.n}, (_,c) => this.top_symbol(r,c))
+      );
+
+      const count_dir = (r,c,dr,dc) => {
+        let cnt=0, i=r, j=c;
+        while(inside(i,j) && top[i][j] === sym){
+          cnt++; i+=dr; j+=dc;
+        }
+        return cnt;
+      };
+
+      const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+      for(let r=0;r<this.n;r++){
+        for(let c=0;c<this.n;c++){
+          if(top[r][c] !== sym) continue;
+          for(const [dr,dc] of dirs){
+            const pr=r-dr, pc=c-dc;
+            if(inside(pr,pc) && top[pr][pc]===sym) continue; // not start
+            const length = count_dir(r,c,dr,dc);
+            if(length === 5){
+              const ar = r + dr*5, ac = c + dc*5;
+              if(!(inside(ar,ac) && top[ar][ac]===sym)) return true; // not overline
+            }
+          }
+        }
+      }
+      return false;
+    }
+  }
+
+  class TilePool {
+    constructor(total){
+      this.total = total;
+      this.used = 0;
+    }
+    remaining(){ return Math.max(0, this.total - this.used); }
+    take(){
+      if(this.remaining() > 0){ this.used++; return true; }
+      return false;
+    }
+    give_back(n=1){
+      this.used = Math.max(0, this.used - n);
+    }
+  }
+
+  class GameState {
+    constructor(total_tiles){
+      this.board = new Board(GRID_SIZE);
+      this.pool = new TilePool(total_tiles);
+      this.current = PLAYER_O;
+      this.orientation = EAST;
+      this.order_flip = false;
+      this.winner = null; // "O" | "X" | "DRAW" | null
+      this.ended_by_simul_loss = false;
+      this.history = [];     // pid stack
+      this.redo_stack = [];  // pid stack
+    }
+
+    current_pair(){
+      const me = this.current;
+      const opp = (me === PLAYER_O) ? PLAYER_X : PLAYER_O;
+      let pair = [me, opp];
+      if(this.order_flip) pair = [pair[1], pair[0]];
+      return pair;
+    }
+
+    next_player(){
+      this.current = (this.current === PLAYER_O) ? PLAYER_X : PLAYER_O;
+      this.order_flip = false;
+    }
+  }
+
+  // -------------------- Move helpers --------------------
+  function get_cells_along(r,c,orientation){
+    if(orientation === EAST)  return [[r,c],[r,c+1]];
+    if(orientation === SOUTH) return [[r,c],[r+1,c]];
+    if(orientation === WEST)  return [[r,c],[r,c-1]];
+    return [[r,c],[r-1,c]]; // NORTH
+  }
+
+  function try_place(gs, r, c){
+    const cells = get_cells_along(r,c,gs.orientation);
+    // bounds
+    for(const [rr,cc] of cells){
+      if(!inside(rr,cc)) return false;
+    }
+    // rules
+    if(!gs.board.can_place(cells)) return false;
+    // pool
+    if(gs.pool.remaining() <= 0) return false;
+
+    const pair = gs.current_pair(); // ["O","X"] maybe flipped
+
+    if(gs.redo_stack.length){
+      // reuse most recent pid, discard rest timeline
+      const reuse_pid = gs.redo_stack.pop();
+      gs.board.place_with_pid(reuse_pid, cells, pair);
+
+      const stale = gs.redo_stack.slice();
+      gs.redo_stack.length = 0;
+      for(const sp of stale){
+        gs.board.placements.delete(sp);
+      }
+
+      if(!gs.pool.take()) return false;
+      gs.history.push(reuse_pid);
+      gs.board.next_pid = gs.history.length ? (Math.max(...gs.history)+1) : 1;
+    } else {
+      const desired_next = gs.history.length ? (Math.max(...gs.history)+1) : 1;
+      gs.board.next_pid = desired_next;
+
+      const pid = gs.board.place(cells, pair);
+      gs.redo_stack.length = 0;
+
+      if(!gs.pool.take()) return false;
+      gs.history.push(pid);
+
+      gs.board.next_pid = Math.max(...gs.history)+1;
+    }
+
+    // Win check
+    const o5 = gs.board.has_exact_five(PLAYER_O);
+    const x5 = gs.board.has_exact_five(PLAYER_X);
+    if(o5 && x5){
+      // mover loses -> winner is opponent of current mover
+      gs.winner = (gs.current === PLAYER_O) ? PLAYER_X : PLAYER_O;
+      gs.ended_by_simul_loss = true;
+    } else if(o5){
+      gs.winner = PLAYER_O;
+    } else if(x5){
+      gs.winner = PLAYER_X;
+    }
+
+    if(gs.winner === null && gs.pool.remaining() === 0){
+      gs.winner = "DRAW";
+    }
+
+    if(gs.winner === null){
+      gs.next_player();
+    }
+    return true;
+  }
+
+  function undo_last(gs){
+    if(!gs.history.length) return false;
+    const last_pid = gs.history.pop();
+    const plc = gs.board.placements.get(last_pid);
+    if(!plc) { gs.history.push(last_pid); return false; }
+
+    let popped = 0;
+    for(const [r,c] of plc.cells){
+      const pidStack = gs.board.pid_stacks[r][c];
+      if(pidStack.length && pidStack[pidStack.length-1] === last_pid){
+        pidStack.pop();
+        gs.board.symbol_stacks[r][c].pop();
+        popped++;
+      }
+    }
+    if(popped === 2){
+      gs.pool.give_back(1);
+      gs.redo_stack.push(last_pid);
+    } else {
+      gs.history.push(last_pid);
+      return false;
+    }
+
+    gs.winner = null;
+    gs.ended_by_simul_loss = false;
+    gs.current = (gs.current === PLAYER_O) ? PLAYER_X : PLAYER_O;
+    gs.order_flip = false;
+    return true;
+  }
+
+  function redo_last(gs){
+    if(!gs.redo_stack.length) return false;
+    const pid = gs.redo_stack.pop();
+    const plc = gs.board.placements.get(pid);
+    if(!plc) { gs.redo_stack.push(pid); return false; }
+
+    const cells = plc.cells;
+    const symbols = plc.symbols;
+
+    gs.board.place_with_pid(pid, cells, symbols);
+    if(!gs.pool.take()){
+      // revert
+      for(const [r,c] of cells.slice().reverse()){
+        const pidStack = gs.board.pid_stacks[r][c];
+        if(pidStack.length && pidStack[pidStack.length-1] === pid){
+          pidStack.pop();
+          gs.board.symbol_stacks[r][c].pop();
+        }
+      }
+      gs.redo_stack.push(pid);
+      return false;
+    }
+    gs.history.push(pid);
+
+    gs.next_player();
+    gs.winner = null;
+    gs.ended_by_simul_loss = false;
+
+    const o5 = gs.board.has_exact_five(PLAYER_O);
+    const x5 = gs.board.has_exact_five(PLAYER_X);
+    if(o5 && x5){
+      gs.winner = (gs.current === PLAYER_O) ? PLAYER_X : PLAYER_O;
+      gs.ended_by_simul_loss = true;
+    } else if(o5){
+      gs.winner = PLAYER_O;
+    } else if(x5){
+      gs.winner = PLAYER_X;
+    }
+    if(gs.winner === null && gs.pool.remaining() === 0){
+      gs.winner = "DRAW";
+    }
+    return true;
+  }
+
+  // -------------------- UI state --------------------
+  let showMenu = true;
+  let tilesTotal = 50; // default
+  let gs = null;
+
+  let hoverCell = null;     // [r,c] or null
+  let message = "";
+
+  // Buttons (computed each frame)
+  const ui = {
+    menu: {
+      minus: null,
+      plus: null,
+      start: null
+    },
+    game: {
+      btnCCW: null,
+      btnCW: null,
+      btnFlip: null,
+      btnUndo: null,
+      btnRedo: null,
+      btnRestart: null,
+      btnNewGame: null
+    }
+  };
+
+  // -------------------- Drawing: grid + stacks + preview --------------------
+  function draw_grid(){
+    // board background
+    ctx.fillStyle = rgb(LIGHT_GRAY);
+    ctx.fillRect(MARGIN, MARGIN, GRID_SIZE*CELL, GRID_SIZE*CELL);
+
+    // grid lines
+    ctx.strokeStyle = rgb(GRAY);
+    ctx.lineWidth = 1;
+    for(let i=0;i<=GRID_SIZE;i++){
+      const x = MARGIN + i*CELL;
+      ctx.beginPath(); ctx.moveTo(x, MARGIN); ctx.lineTo(x, MARGIN+GRID_SIZE*CELL); ctx.stroke();
+      const y = MARGIN + i*CELL;
+      ctx.beginPath(); ctx.moveTo(MARGIN, y); ctx.lineTo(MARGIN+GRID_SIZE*CELL, y); ctx.stroke();
+    }
+
+    // axis labels
+    ctx.fillStyle = rgb(DARK);
+    ctx.font = "14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for(let r=0;r<GRID_SIZE;r++){
+      ctx.fillText(String(r), MARGIN-14, MARGIN + r*CELL + CELL/2);
+    }
+    for(let c=0;c<GRID_SIZE;c++){
+      ctx.fillText(String(c), MARGIN + c*CELL + CELL/2, MARGIN-12);
+    }
+  }
+
+  function draw_stacks(board){
+    for(let r=0;r<board.n;r++){
+      for(let c=0;c<board.n;c++){
+        const rect = cellRect(r,c);
+        const top = board.top_symbol(r,c);
+        const h = board.height(r,c);
+
+        if(top === PLAYER_O){
+          // O red circle
+          ctx.strokeStyle = rgb(RED);
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(rect.x+rect.w/2, rect.y+rect.h/2, CELL/3, 0, Math.PI*2);
+          ctx.stroke();
+        } else if(top === PLAYER_X){
+          // X blue
+          ctx.strokeStyle = rgb(BLUE);
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(rect.x+8, rect.y+8);
+          ctx.lineTo(rect.x+rect.w-8, rect.y+rect.h-8);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(rect.x+8, rect.y+rect.h-8);
+          ctx.lineTo(rect.x+rect.w-8, rect.y+8);
+          ctx.stroke();
+        }
+
+        // height label + pid label
+        if(h > 0){
+          ctx.fillStyle = rgb(DARK);
+          ctx.font = "12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "top";
+          ctx.fillText(String(h), rect.x + rect.w - 14, rect.y + 2);
+
+          const pid = board.pid_stacks[r][c][h-1];
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(String(pid), rect.x + 2, rect.y + rect.h - 2);
+        }
+      }
+    }
+  }
+
+  function draw_preview(gs, hover){
+    if(!hover) return;
+    const [r,c] = hover;
+    const cells = get_cells_along(r,c,gs.orientation);
+    if(!cells) return;
+
+    const colors = { [PLAYER_O]: RED, [PLAYER_X]: BLUE };
+    const pair = gs.current_pair();
+
+    const inBounds = cells.every(([rr,cc]) => inside(rr,cc));
+    const can = inBounds && gs.board.can_place(cells);
+
+    for(let i=0;i<2;i++){
+      const [rr,cc] = cells[i];
+      if(!inside(rr,cc)) continue;
+      const rect = cellRect(rr,cc);
+      const col = colors[pair[i]];
+
+      ctx.fillStyle = rgba(col, can ? 0.27 : 0.10);
+      ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+      // faint symbol
+      ctx.strokeStyle = rgba(col, can ? 0.65 : 0.35);
+      ctx.lineWidth = 1;
+      if(pair[i] === PLAYER_O){
+        ctx.beginPath();
+        ctx.arc(rect.x+rect.w/2, rect.y+rect.h/2, CELL/3, 0, Math.PI*2);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.moveTo(rect.x+10, rect.y+10);
+        ctx.lineTo(rect.x+rect.w-10, rect.y+rect.h-10);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(rect.x+10, rect.y+rect.h-10);
+        ctx.lineTo(rect.x+rect.w-10, rect.y+10);
+        ctx.stroke();
+      }
+    }
+
+    // seam badge
+    if(inBounds){
+      const [[r1,c1],[r2,c2]] = cells;
+      const h1 = gs.board.height(r1,c1);
+      const h2 = gs.board.height(r2,c2);
+      if(h1 === h2 && h1 > 0){
+        const pidA = gs.board.pid_stacks[r1][c1][h1-1];
+        const pidB = gs.board.pid_stacks[r2][c2][h2-1];
+        const good = pidA !== pidB;
+
+        const rect1 = cellRect(r1,c1);
+        const rect2 = cellRect(r2,c2);
+        const midx = (rect1.x+rect1.w/2 + rect2.x+rect2.w/2)/2;
+        const midy = (rect1.y+rect1.h/2 + rect2.y+rect2.h/2)/2;
+
+        const clr = good ? SEAM_GOOD : SEAM_BAD;
+        ctx.fillStyle = rgb(clr);
+        ctx.beginPath();
+        ctx.arc(midx, midy, 8, 0, Math.PI*2);
+        ctx.fill();
+
+        ctx.strokeStyle = rgb(WHITE);
+        ctx.lineWidth = 2;
+        if(good){
+          ctx.beginPath();
+          ctx.moveTo(midx-3, midy);
+          ctx.lineTo(midx-1, midy+3);
+          ctx.lineTo(midx+4, midy-3);
+          ctx.stroke();
+        } else {
+          ctx.beginPath();
+          ctx.moveTo(midx-4, midy-4);
+          ctx.lineTo(midx+4, midy+4);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(midx-4, midy+4);
+          ctx.lineTo(midx+4, midy-4);
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  // -------------------- Drawing: buttons + panels --------------------
+  function draw_button(rect, label, fill, stroke, textCol){
+    roundedRectPath(rect.x, rect.y, rect.w, rect.h, 10);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = textCol;
+    ctx.font = "16px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, rect.x + rect.w/2, rect.y + rect.h/2);
+  }
+
+  function draw_menu(){
+    ctx.fillStyle = rgb(WHITE);
+    ctx.fillRect(0,0,W,H);
+
+    ctx.fillStyle = rgb(BLACK);
+    ctx.font = "28px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Trexo — Start", MARGIN, MARGIN);
+
+    let y = MARGIN + 60;
+    ctx.font = "16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.fillStyle = rgb(DARK);
+    ctx.fillText("Total domino tiles (shared pool):", MARGIN, y);
+
+    y += 34;
+    const minus = { x: MARGIN, y, w: 40, h: 36 };
+    const val   = { x: MARGIN+50, y, w: 110, h: 36 };
+    const plus  = { x: MARGIN+170, y, w: 40, h: 36 };
+
+    ui.menu.minus = minus; ui.menu.plus = plus;
+
+    draw_button(minus, "−", rgb(LIGHT_GRAY), rgb(GRAY), rgb(DARK));
+    draw_button(plus,  "+", rgb(LIGHT_GRAY), rgb(GRAY), rgb(DARK));
+
+    // value box
+    ctx.fillStyle = rgb(WHITE);
+    ctx.fillRect(val.x, val.y, val.w, val.h);
+    ctx.strokeStyle = rgb(GRAY);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(val.x, val.y, val.w, val.h);
+
+    ctx.fillStyle = rgb(BLACK);
+    ctx.font = "22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(tilesTotal), val.x + val.w/2, val.y + val.h/2);
+
+    y += 70;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.font = "14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.fillStyle = rgb(DARK);
+    ctx.fillText("Tip: Use 40–60 for a tense game on 10x10.", MARGIN, y);
+
+    y += 40;
+    const start = { x: MARGIN, y, w: 160, h: 44 };
+    ui.menu.start = start;
+    draw_button(start, "Start (Enter)", rgb(GREEN), rgb([40,140,90]), "white");
+
+    y = start.y + start.h + 18;
+    const controls = [
+      "Controls:",
+      "• Click/tap = place",
+      "• Q / E or buttons = rotate CCW / CW",
+      "• F or button = flip ends",
+      "• Z / Ctrl+Z or button = Undo",
+      "• Y / Ctrl+Y or button = Redo",
+      "",
+      "Buttons in-game:",
+      "• Restart = same tiles",
+      "• New Game… = back to this menu",
+    ];
+    ctx.fillStyle = rgb(DARK);
+    ctx.font = "14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    for(const ln of controls){
+      ctx.fillText(ln, MARGIN, y);
+      y += 20;
+    }
+  }
+
+  function orientationName(o){
+    if(o===EAST) return "→ East";
+    if(o===SOUTH) return "↓ South";
+    if(o===WEST) return "← West";
+    return "↑ North";
+  }
+
+  function draw_game(){
+    ctx.fillStyle = rgb(WHITE);
+    ctx.fillRect(0,0,W,H);
+
+    // board
+    draw_grid();
+    draw_stacks(gs.board);
+    draw_preview(gs, hoverCell);
+
+    // panel background + divider
+    const panelX = MARGIN + GRID_SIZE*CELL;
+    ctx.fillStyle = rgb(WHITE);
+    ctx.fillRect(panelX, 0, PANEL_W, H);
+    ctx.strokeStyle = rgb(GRAY);
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(panelX, 0); ctx.lineTo(panelX, H); ctx.stroke();
+
+    let px = panelX + 18;
+    let py = MARGIN;
+
+    // title
+    ctx.fillStyle = rgb(BLACK);
+    ctx.font = "22px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Trexo", px, py);
+    py += 34;
+
+    // message
+    ctx.fillStyle = rgb(DARK);
+    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.fillText(message, px, py);
+    py += 22;
+
+    // status
+    ctx.fillText(`Tiles remaining: ${gs.pool.remaining()}`, px, py);
+    py += 20;
+    const turnStr = (gs.current===PLAYER_O) ? "O (Red)" : "X (Blue)";
+    ctx.fillStyle = (gs.current===PLAYER_O) ? rgb(RED) : rgb(BLUE);
+    ctx.fillText(`Turn: ${turnStr}`, px, py);
+    py += 20;
+
+    ctx.fillStyle = rgb(DARK);
+    ctx.fillText(`Orientation: ${orientationName(gs.orientation)}`, px, py);
+    py += 20;
+    ctx.fillText(`Ends: ${gs.order_flip ? "X|O" : "O|X"}`, px, py);
+    py += 18;
+
+    // Buttons layout
+    const btnW = PANEL_W - 36;
+    const rowH = 40;
+
+    // small row with two rotate buttons
+    const half = (btnW - 8) / 2;
+    const bCCW = { x: px, y: py+12, w: half, h: rowH };
+    const bCW  = { x: px+half+8, y: py+12, w: half, h: rowH };
+    ui.game.btnCCW = bCCW;
+    ui.game.btnCW = bCW;
+    draw_button(bCCW, "⟲ Rotate CCW", rgb(LIGHT_GRAY), rgb(GRAY), rgb(DARK));
+    draw_button(bCW,  "⟳ Rotate CW",  rgb(LIGHT_GRAY), rgb(GRAY), rgb(DARK));
+    py += 12 + rowH + 10;
+
+    const bFlip = { x:px, y:py, w:btnW, h:rowH };
+    ui.game.btnFlip = bFlip;
+    draw_button(bFlip, "⇄ Flip Ends", rgb(LIGHT_GRAY), rgb(GRAY), rgb(DARK));
+    py += rowH + 10;
+
+    const bUndo = { x:px, y:py, w:half, h:rowH };
+    const bRedo = { x:px+half+8, y:py, w:half, h:rowH };
+    ui.game.btnUndo = bUndo;
+    ui.game.btnRedo = bRedo;
+    draw_button(bUndo, "Undo", rgb(LIGHT_GRAY), rgb(GRAY), rgb(DARK));
+    draw_button(bRedo, "Redo", rgb(LIGHT_GRAY), rgb(GRAY), rgb(DARK));
+    py += rowH + 14;
+
+    const bRestart = { x:px, y:py, w:half, h:rowH };
+    ui.game.btnRestart = bRestart;
+    draw_button(bRestart, "Restart", rgb(ORANGE), "rgb(200,120,40)", "white");
+
+    const bNew = { x:px+half+8, y:py, w:half, h:rowH };
+    ui.game.btnNewGame = bNew;
+    draw_button(bNew, "New Game…", rgb([90,120,170]), "rgb(60,90,140)", "white");
+    py += rowH + 18;
+    const rulesIndent = 60
+    // rules block
+    const rules = [
+      "Rules:",
+      "• Place O|X dominoes.",
+      "• Stack only if both cells",
+      "  same height (>0) and",
+      "  you bridge a seam",
+      "  (two different tiles).",
+      "• Exact five wins.",
+      "  Overlines do not count.",
+      "• If both complete at once,",
+      "  mover loses.",
+      "• Pool exhaustion = draw.",
+    ];
+    ctx.fillStyle = rgb(DARK);
+    ctx.font = "12px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    for(const ln of rules){
+      ctx.fillText(ln, px + rulesIndent, py);
+      py += 16;
+    }
+  }
+
+  // -------------------- Menu / game transitions --------------------
+  function startGame(){
+    gs = new GameState(tilesTotal);
+
+    // initial message
+    message = "O (Red) to move";
+    showMenu = false;
+    hoverCell = null;
+  }
+
+  function restartSameTiles(){
+    gs = new GameState(tilesTotal);
+    message = "Restarted (same tiles). O (Red) to move";
+    hoverCell = null;
+  }
+
+  function goToMenu(){
+    showMenu = true;
+    gs = null;
+    hoverCell = null;
+    message = "";
+  }
+
+  // -------------------- Input --------------------
+  function getMousePos(ev){
+    const rect = canvas.getBoundingClientRect();
+    const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+    return {x,y};
+  }
+
+  function get_mouse_cell(x,y){
+    const bx0=MARGIN, by0=MARGIN;
+    const bx1=MARGIN + GRID_SIZE*CELL;
+    const by1=MARGIN + GRID_SIZE*CELL;
+    if(!(bx0 <= x && x < bx1 && by0 <= y && y < by1)) return null;
+    const c = Math.floor((x - MARGIN)/CELL);
+    const r = Math.floor((y - MARGIN)/CELL);
+    return [r,c];
+  }
+
+  function updateMessageAfterMove(){
+    if(!gs) return;
+    if(gs.winner === PLAYER_O) message = "O (Red) wins!";
+    else if(gs.winner === PLAYER_X){
+      if(gs.ended_by_simul_loss) message = "X (Blue) wins — mover completed both!";
+      else message = "X (Blue) wins!";
+    } else if(gs.winner === "DRAW") message = "Draw — tile pool exhausted.";
+    else {
+      const cur = (gs.current===PLAYER_O) ? "O (Red)" : "X (Blue)";
+      message = `${cur} to move`;
+    }
+  }
+
+  function onClickAt(x,y){
+    if(showMenu){
+      const {minus, plus, start} = ui.menu;
+      if(minus && pointInRect(x,y,minus)){
+        tilesTotal = Math.max(1, tilesTotal - 1);
+        return;
+      }
+      if(plus && pointInRect(x,y,plus)){
+        tilesTotal = Math.min(200, tilesTotal + 1);
+        return;
+      }
+      if(start && pointInRect(x,y,start)){
+        startGame();
+        return;
+      }
+      return;
+    }
+
+    // in-game
+    if(!gs) return;
+
+    // panel buttons
+    const b = ui.game;
+    if(b.btnCCW && pointInRect(x,y,b.btnCCW)){
+      gs.orientation = (gs.orientation + 3) % 4;
+      return;
+    }
+    if(b.btnCW && pointInRect(x,y,b.btnCW)){
+      gs.orientation = (gs.orientation + 1) % 4;
+      return;
+    }
+    if(b.btnFlip && pointInRect(x,y,b.btnFlip)){
+      gs.order_flip = !gs.order_flip;
+      return;
+    }
+    if(b.btnUndo && pointInRect(x,y,b.btnUndo)){
+      if(undo_last(gs)) message = "Undid last move.";
+      updateMessageAfterMove(); // may restore ongoing state
+      return;
+    }
+    if(b.btnRedo && pointInRect(x,y,b.btnRedo)){
+      if(redo_last(gs)) message = "Redid move.";
+      updateMessageAfterMove();
+      return;
+    }
+    if(b.btnRestart && pointInRect(x,y,b.btnRestart)){
+      restartSameTiles();
+      return;
+    }
+    if(b.btnNewGame && pointInRect(x,y,b.btnNewGame)){
+      goToMenu();
+      return;
+    }
+
+    // board click
+    const cell = get_mouse_cell(x,y);
+    if(cell && gs.winner === null){
+      const [r,c] = cell;
+      const placed = try_place(gs, r, c);
+      if(placed) updateMessageAfterMove();
+    }
+  }
+
+  canvas.addEventListener("mousemove", (ev) => {
+    const {x,y} = getMousePos(ev);
+    if(showMenu || !gs){ hoverCell = null; return; }
+    hoverCell = get_mouse_cell(x,y);
+  });
+
+  canvas.addEventListener("mousedown", (ev) => {
+    const {x,y} = getMousePos(ev);
+    onClickAt(x,y);
+  });
+
+  canvas.addEventListener("touchstart", (ev) => {
+    ev.preventDefault();
+    const t = ev.changedTouches[0];
+    const rect = canvas.getBoundingClientRect();
+    const x = (t.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (t.clientY - rect.top) * (canvas.height / rect.height);
+
+    // 모바일은 hover가 없으니, 탭하면 해당 셀을 hover로 갱신해 preview가 보이게도 해줌
+    if(!showMenu && gs){
+      const cell = get_mouse_cell(x,y);
+      hoverCell = cell;
+    }
+    onClickAt(x,y);
+  }, {passive:false});
+
+  window.addEventListener("keydown", (ev) => {
+    if(showMenu){
+      if(ev.key === "Enter"){
+        startGame();
+        return;
+      }
+      if(ev.key === "-" || ev.key === "ArrowLeft"){
+        tilesTotal = Math.max(1, tilesTotal - 1);
+        return;
+      }
+      if(ev.key === "+" || ev.key === "=" || ev.key === "ArrowRight"){
+        tilesTotal = Math.min(200, tilesTotal + 1);
+        return;
+      }
+      if(ev.key === "Escape"){
+        // nothing special; keep menu
+        return;
+      }
+      return;
+    }
+
+    if(!gs) return;
+
+    const ctrl = ev.ctrlKey || ev.metaKey;
+    if(ev.key === "q" || ev.key === "Q"){
+      gs.orientation = (gs.orientation + 3) % 4;
+    } else if(ev.key === "e" || ev.key === "E"){
+      gs.orientation = (gs.orientation + 1) % 4;
+    } else if(ev.key === "f" || ev.key === "F"){
+      gs.order_flip = !gs.order_flip;
+    } else if(ev.key === "z" || ev.key === "Z"){
+      // treat as undo (with or without ctrl)
+      if(undo_last(gs)) message = "Undid last move.";
+      updateMessageAfterMove();
+    } else if(ev.key === "y" || ev.key === "Y"){
+      if(redo_last(gs)) message = "Redid move.";
+      updateMessageAfterMove();
+    } else if(ev.key === "r" || ev.key === "R"){
+      // keep as redo shortcut like python had, but on web people expect R=restart.
+      // We'll do: Shift+R => Restart, plain R => Redo (to mirror your pygame).
+      if(ev.shiftKey){
+        restartSameTiles();
+      } else {
+        if(redo_last(gs)) message = "Redid move.";
+        updateMessageAfterMove();
+      }
+    } else if(ev.key === "Escape"){
+      // go to menu (non-destructive in sense of just leaving game)
+      goToMenu();
+    }
+  });
+
+  // -------------------- Main loop --------------------
+  function tick(){
+    // background
+    ctx.fillStyle = rgb(WHITE);
+    ctx.fillRect(0,0,W,H);
+
+    if(showMenu){
+      draw_menu();
+    } else {
+      draw_game();
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  // init menu
+  showMenu = true;
+  draw_menu();
+  tick();
+})();
+</script>
+</body>
+</html>
