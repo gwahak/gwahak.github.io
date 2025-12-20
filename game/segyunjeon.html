@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>세균전 (8x8 Ataxx Variant)</title>
+  <style>
+    :root { --bg: rgb(245,245,245); --panel: rgb(245,247,250); --grid: rgb(190,190,190); }
+    html, body { margin:0; padding:0; background: var(--bg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    .wrap { display:flex; justify-content:center; align-items:flex-start; padding:16px; gap:16px; flex-wrap:wrap; }
+    canvas { background: transparent; touch-action: none; } /* 중요: 터치 스크롤/줌 방지 */
+    .panel {
+      width: 320px;
+      background: var(--panel);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 6px 20px rgba(0,0,0,.06);
+    }
+    .h { font-weight: 800; font-size: 18px; margin-bottom: 10px; }
+    .row { display:flex; gap:10px; margin: 10px 0; flex-wrap:wrap; }
+    button {
+      flex:1;
+      min-width: 120px;
+      height: 38px;
+      border-radius: 12px;
+      border: 1px solid rgb(180,185,195);
+      background: rgb(230,234,240);
+      font-weight: 700;
+      cursor:pointer;
+    }
+    button.small { min-width: 70px; flex: 0 0 auto; padding: 0 10px; }
+    button.on { background: rgb(255,235,200); border-color: rgb(180,120,60); }
+    .kv { color: rgb(40,40,40); margin: 6px 0; font-size: 15px; }
+    .muted { color: rgb(90,90,100); font-size: 13px; line-height: 1.45; }
+    .msg { margin-top: 10px; font-size: 13px; color: rgb(60,60,70); min-height: 18px; }
+    .msg.err { color: rgb(160,30,30); font-weight: 700; }
+    .legend { margin-top: 10px; font-size: 13px; color: rgb(70,70,80); }
+    code { background:#f2f2f2; padding:2px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="cv"></canvas>
+
+  <div class="panel">
+    <div class="h">세균전 (Ataxx Variant)</div>
+
+    <div class="kv" id="turnLine">Turn:</div>
+    <div class="kv" id="scoreLine">Red 0 : 0 Blue</div>
+    <div class="kv" id="emptyLine">Empty: 0</div>
+
+    <div class="row">
+      <button id="btnNew">New</button>
+      <button id="btnCancel">Cancel</button>
+    </div>
+
+    <div class="row">
+      <button id="btnUndo">Undo</button>
+      <button id="btnRedo">Redo</button>
+    </div>
+
+    <div class="row">
+      <button id="btnRedAI" class="small">Red AI</button>
+      <button id="btnBlueAI" class="small on">Blue AI</button>
+    </div>
+
+    <div class="row">
+      <button id="btnMode" class="small">Mode: Minimax</button>
+      <button id="btnDepth" class="small">Depth: 2</button>
+    </div>
+
+    <div class="row">
+      <button id="btnNPLm" class="small">NP -2</button>
+      <button id="btnNPLp" class="small">NP +2</button>
+    </div>
+
+    <div class="muted" id="npLine">No-Progress: 0/20</div>
+
+    <div class="muted legend">
+      조작:
+      <br/>- 내 돌을 탭 → 가능한 칸이 표시됨
+      <br/>- 표시된 칸 탭 → 착수
+      <br/>- Clone(거리 1) / Jump(거리 2)
+      <br/>- 착수 후 인접 8칸 감염
+    </div>
+
+    <div class="msg" id="msg"></div>
+    <div class="muted" id="aiTime">Last AI: -</div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // -------------------- Config --------------------
+  const GRID = 8;
+  const CELL = 72;
+  const MARGIN = 28;
+  const BOARD_W = GRID * CELL;
+  const BOARD_H = GRID * CELL;
+
+  const EMPTY = 0, RED = 1, BLUE = 2;
+
+  const BG = [245,245,245];
+  const BOARD_COLOR = [230,230,230];
+  const GRID_COLOR = [190,190,190];
+  const RED_COLOR = [220,40,40];
+  const BLUE_COLOR = [40,100,220];
+  const SEL_COLOR = [30,30,30];
+  const CLONE_HINT = [20,180,60];
+  const JUMP_HINT = [150,60,200];
+
+  const rgb = (a)=>`rgb(${a[0]},${a[1]},${a[2]})`;
+
+  // -------------------- Canvas --------------------
+  const cv = document.getElementById("cv");
+  // 패널과 별개로 보드만 캔버스로: 태블릿에서 딱 깔끔
+  cv.width = MARGIN*2 + BOARD_W;
+  cv.height = MARGIN*2 + BOARD_H;
+  const ctx = cv.getContext("2d");
+
+  // -------------------- Helpers --------------------
+  const inside = (r,c)=> (0<=r && r<GRID && 0<=c && c<GRID);
+  const cheb = (a,b)=> Math.max(Math.abs(a[0]-b[0]), Math.abs(a[1]-b[1]));
+
+  function* neighbors8(r,c){
+    for (let dr=-1; dr<=1; dr++){
+      for (let dc=-1; dc<=1; dc++){
+        if (dr===0 && dc===0) continue;
+        const rr=r+dr, cc=c+dc;
+        if (inside(rr,cc)) yield [rr,cc];
+      }
+    }
+  }
+  function* ring16dist2(r,c){
+    for (let rr=r-2; rr<=r+2; rr++){
+      for (let cc=c-2; cc<=c+2; cc++){
+        if (!inside(rr,cc)) continue;
+        if (rr===r && cc===c) continue;
+        if (Math.max(Math.abs(rr-r), Math.abs(cc-c))===2) yield [rr,cc];
+      }
+    }
+  }
+  function countPieces(board){
+    let r=0,b=0;
+    for (let i=0;i<GRID;i++){
+      for (let j=0;j<GRID;j++){
+        if (board[i][j]===RED) r++;
+        else if (board[i][j]===BLUE) b++;
+      }
+    }
+    const e = GRID*GRID - (r+b);
+    return {r,b,e};
+  }
+
+  function generateMoves(board, player){
+    const moves = [];
+    for (let r=0;r<GRID;r++){
+      for (let c=0;c<GRID;c++){
+        if (board[r][c]!==player) continue;
+        for (const [rr,cc] of neighbors8(r,c)){
+          if (board[rr][cc]===EMPTY) moves.push([r,c,rr,cc,true]);   // clone
+        }
+        for (const [rr,cc] of ring16dist2(r,c)){
+          if (board[rr][cc]===EMPTY) moves.push([r,c,rr,cc,false]);  // jump
+        }
+      }
+    }
+    return moves;
+  }
+
+  function deepCopyBoard(b){
+    return b.map(row => row.slice());
+  }
+
+  function playMoveOn(board, player, mv){
+    const [sr,sc,dr,dc,isClone] = mv;
+    const nb = deepCopyBoard(board);
+    if (nb[dr][dc]!==EMPTY) return null;
+
+    if (isClone){
+      nb[dr][dc]=player;
+    } else {
+      nb[dr][dc]=player;
+      nb[sr][sc]=EMPTY;
+    }
+    const opp = (player===RED)?BLUE:RED;
+    for (const [rr,cc] of neighbors8(dr,dc)){
+      if (nb[rr][cc]===opp) nb[rr][cc]=player;
+    }
+    const np = (player===RED)?BLUE:RED;
+    return {board: nb, next: np};
+  }
+
+  // -------------------- Game State --------------------
+  const game = {
+    board: Array.from({length:GRID}, ()=>Array(GRID).fill(EMPTY)),
+    turn: RED,
+    history: [],
+    redo: [],
+    message: "",
+    msgIsErr: false,
+
+    aiOn: { [RED]: false, [BLUE]: true },
+    aiDepth: 2,
+    aiGreedy: false,
+
+    noProgressLimit: 20,
+    noProgressPlies: 0,
+    lastRB: {r:0,b:0},
+    forceGameOver: false,
+  };
+
+  function reset(){
+    game.board = Array.from({length:GRID}, ()=>Array(GRID).fill(EMPTY));
+    // 원본 파이썬 배치 그대로
+    for (const r of [0,1]) for (const c of [0,1]) game.board[r][c]=RED;
+    for (const r of [GRID-2, GRID-1]) for (const c of [GRID-2, GRID-1]) game.board[r][c]=RED;
+    for (const r of [GRID-2, GRID-1]) for (const c of [0,1]) game.board[r][c]=BLUE;
+    for (const r of [0,1]) for (const c of [GRID-2, GRID-1]) game.board[r][c]=BLUE;
+
+    game.turn = RED;
+    game.history.length = 0;
+    game.redo.length = 0;
+    game.message = "";
+    game.msgIsErr = false;
+
+    const {r,b} = countPieces(game.board);
+    game.lastRB = {r,b};
+    game.noProgressPlies = 0;
+    game.forceGameOver = false;
+
+    selected = null;
+    cloneTargets.clear();
+    jumpTargets.clear();
+  }
+
+  function copyState(){
+    return {
+      board: deepCopyBoard(game.board),
+      turn: game.turn,
+      noProgressPlies: game.noProgressPlies,
+      lastRB: {...game.lastRB},
+      forceGameOver: game.forceGameOver,
+    };
+  }
+  function restoreState(st){
+    game.board = deepCopyBoard(st.board);
+    game.turn = st.turn;
+    game.noProgressPlies = st.noProgressPlies;
+    game.lastRB = {...st.lastRB};
+    game.forceGameOver = st.forceGameOver;
+  }
+
+  function legalMoves(player){
+    return generateMoves(game.board, player);
+  }
+
+  function updateNoProgress(){
+    const {r,b} = countPieces(game.board);
+    if (r===game.lastRB.r && b===game.lastRB.b){
+      game.noProgressPlies++;
+      if (game.noProgressPlies >= game.noProgressLimit) game.forceGameOver = true;
+    } else {
+      game.noProgressPlies = 0;
+      game.lastRB = {r,b};
+    }
+  }
+
+  function advanceTurn(){
+    game.turn = (game.turn===RED)?BLUE:RED;
+    if (legalMoves(game.turn).length===0){
+      game.message = (game.turn===RED ? "Red" : "Blue") + " has no moves: Pass";
+      game.msgIsErr = false;
+      game.turn = (game.turn===RED)?BLUE:RED;
+    } else {
+      game.message = "";
+      game.msgIsErr = false;
+    }
+  }
+
+  function gameOver(){
+    if (game.forceGameOver) return true;
+    const {e} = countPieces(game.board);
+    if (e===0) return true;
+    if (legalMoves(RED).length===0 && legalMoves(BLUE).length===0) return true;
+    return false;
+  }
+
+  function winner(){
+    const {r,b} = countPieces(game.board);
+    if (r>b) return "Red";
+    if (b>r) return "Blue";
+    return "Draw";
+  }
+
+  function applyMove(src, dst){
+    const [sr,sc] = src;
+    const [dr,dc] = dst;
+
+    if (game.board[dr][dc] !== EMPTY){
+      game.message = "That cell is occupied.";
+      game.msgIsErr = true;
+      return false;
+    }
+    const dist = cheb(src, dst);
+    if (dist!==1 && dist!==2) return false;
+
+    // 합법 수 확인
+    const moves = legalMoves(game.turn);
+    const tentative = [sr,sc,dr,dc,(dist===1)];
+    let ok = false;
+    for (const mv of moves){
+      if (mv[0]===tentative[0] && mv[1]===tentative[1] && mv[2]===tentative[2] && mv[3]===tentative[3] && mv[4]===tentative[4]){
+        ok=true; break;
+      }
+    }
+    if (!ok) return false;
+
+    game.history.push(copyState());
+    game.redo.length = 0;
+
+    if (dist===1){
+      game.board[dr][dc] = game.turn;
+    } else {
+      game.board[dr][dc] = game.turn;
+      game.board[sr][sc] = EMPTY;
+    }
+
+    // 감염
+    const opp = (game.turn===RED)?BLUE:RED;
+    for (const [rr,cc] of neighbors8(dr,dc)){
+      if (game.board[rr][cc]===opp) game.board[rr][cc]=game.turn;
+    }
+
+    updateNoProgress();
+    advanceTurn();
+    return true;
+  }
+
+  function undo(){
+    if (game.history.length===0) return;
+    game.redo.push(copyState());
+    const prev = game.history.pop();
+    restoreState(prev);
+    game.message = "Undo";
+    game.msgIsErr = false;
+    selected = null;
+    cloneTargets.clear();
+    jumpTargets.clear();
+  }
+  function redo(){
+    if (game.redo.length===0) return;
+    game.history.push(copyState());
+    const nxt = game.redo.pop();
+    restoreState(nxt);
+    game.message = "Redo";
+    game.msgIsErr = false;
+    selected = null;
+    cloneTargets.clear();
+    jumpTargets.clear();
+  }
+
+  // -------------------- AI --------------------
+  function mobility(board, player){
+    return generateMoves(board, player).length;
+  }
+
+  function evaluate(board, me){
+    const {r,b} = countPieces(board);
+    const opp = (me===RED)?BLUE:RED;
+    const my = (me===RED)?r:b;
+    const op = (me===RED)?b:r;
+
+    let centerBonus = 0.0;
+    for (let rr=0; rr<GRID; rr++){
+      for (let cc=0; cc<GRID; cc++){
+        const d = Math.max(Math.abs(rr-3.5), Math.abs(cc-3.5));
+        if (board[rr][cc]===me) centerBonus += (3 - d) * 0.2;
+        else if (board[rr][cc]===opp) centerBonus -= (3 - d) * 0.2;
+      }
+    }
+    const wCount=1.0, wMob=0.2;
+    const myM = mobility(board, me);
+    const opM = mobility(board, opp);
+    return wCount*(my-op) + wMob*(myM-opM) + centerBonus;
+  }
+
+  function greedyBestMove(board, player){
+    let best=null, bestScore=-1e18;
+    const moves = generateMoves(board, player);
+    const base = countPieces(board);
+    for (const mv of moves){
+      const res = playMoveOn(board, player, mv);
+      if (!res) continue;
+      const after = countPieces(res.board);
+      const gain = (player===RED) ? (after.r - base.r) : (after.b - base.b);
+      const d = Math.max(Math.abs(mv[2]-3.5), Math.abs(mv[3]-3.5));
+      const central = (3 - d) * 0.1;
+      const sc = gain + central;
+      if (sc > bestScore){
+        bestScore=sc; best=mv;
+      }
+    }
+    return best;
+  }
+
+  function minimax(board, player, depth, alpha, beta, root){
+    if (depth===0) return {val: evaluate(board, root), mv: null};
+
+    const moves = generateMoves(board, player);
+    const opp = (player===RED)?BLUE:RED;
+
+    if (moves.length===0){
+      const oppMoves = generateMoves(board, opp);
+      if (oppMoves.length===0) return {val: evaluate(board, root), mv: null};
+      return minimax(board, opp, depth, alpha, beta, root);
+    }
+
+    const maximizing = (player===root);
+    let bestMove=null;
+
+    if (maximizing){
+      let value=-1e18;
+      for (const mv of moves){
+        const res = playMoveOn(board, player, mv);
+        if (!res) continue;
+        const child = minimax(res.board, res.next, depth-1, alpha, beta, root).val;
+        if (child > value){
+          value=child; bestMove=mv;
+        }
+        alpha = Math.max(alpha, value);
+        if (beta <= alpha) break;
+      }
+      return {val:value, mv:bestMove};
+    } else {
+      let value=1e18;
+      for (const mv of moves){
+        const res = playMoveOn(board, player, mv);
+        if (!res) continue;
+        const child = minimax(res.board, res.next, depth-1, alpha, beta, root).val;
+        if (child < value){
+          value=child; bestMove=mv;
+        }
+        beta = Math.min(beta, value);
+        if (beta <= alpha) break;
+      }
+      return {val:value, mv:bestMove};
+    }
+  }
+
+  function aiChooseMove(){
+    const player = game.turn;
+    const moves = legalMoves(player);
+    if (moves.length===0) return null;
+    if (game.aiGreedy || game.aiDepth<=1) return greedyBestMove(game.board, player);
+    const out = minimax(deepCopyBoard(game.board), player, game.aiDepth, -1e18, 1e18, player);
+    return out.mv || greedyBestMove(game.board, player);
+  }
+
+  // -------------------- UI / Input --------------------
+  let selected = null; // [r,c]
+  const cloneTargets = new Set(); // "r,c"
+  const jumpTargets  = new Set();
+
+  function keyRC(r,c){ return `${r},${c}`; }
+
+  function computeTargetsFromSelected(){
+    cloneTargets.clear(); jumpTargets.clear();
+    if (!selected) return;
+    const [r,c] = selected;
+    const moves = legalMoves(game.turn);
+    for (const mv of moves){
+      const [sr,sc,dr,dc,isClone] = mv;
+      if (sr===r && sc===c){
+        (isClone ? cloneTargets : jumpTargets).add(keyRC(dr,dc));
+      }
+    }
+  }
+
+  function cellFromPos(x,y){
+    const bx = x - MARGIN, by = y - MARGIN;
+    if (bx<0 || by<0) return null;
+    const c = Math.floor(bx / CELL);
+    const r = Math.floor(by / CELL);
+    if (!inside(r,c)) return null;
+    return [r,c];
+  }
+
+  cv.addEventListener("contextmenu", (e)=>e.preventDefault());
+
+  // 태블릿/마우스 통합
+  cv.addEventListener("pointerdown", (e)=>{
+    const rect = cv.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (cv.width / rect.width);
+    const y = (e.clientY - rect.top) * (cv.height / rect.height);
+
+    if (gameOver()) return;
+    if (game.aiOn[game.turn]) return; // AI 턴엔 입력 막기
+
+    const cell = cellFromPos(x,y);
+    if (!cell) return;
+
+    const [r,c] = cell;
+    const v = game.board[r][c];
+
+    if (!selected){
+      if (v === game.turn){
+        selected = [r,c];
+        computeTargetsFromSelected();
+      }
+      return;
+    } else {
+      // 선택된 상태에서 타겟 클릭
+      const dist = cheb(selected, [r,c]);
+      const isClone = (dist===1);
+      const isJump = (dist===2);
+      const k = keyRC(r,c);
+      const ok = (isClone && cloneTargets.has(k)) || (isJump && jumpTargets.has(k));
+
+      if (ok){
+        applyMove(selected, [r,c]);
+      } else if (v === game.turn) {
+        // 내 말 다른 걸 탭하면 선택 변경
+        selected = [r,c];
+        computeTargetsFromSelected();
+      } else {
+        // 그 외는 취소
+        selected = null;
+        cloneTargets.clear();
+        jumpTargets.clear();
+      }
+    }
+  });
+
+  // -------------------- Buttons --------------------
+  const $ = (id)=>document.getElementById(id);
+  const turnLine = $("turnLine");
+  const scoreLine = $("scoreLine");
+  const emptyLine = $("emptyLine");
+  const msgEl = $("msg");
+  const npLine = $("npLine");
+  const aiTimeEl = $("aiTime");
+
+  const btnNew = $("btnNew");
+  const btnCancel = $("btnCancel");
+  const btnUndo = $("btnUndo");
+  const btnRedo = $("btnRedo");
+  const btnRedAI = $("btnRedAI");
+  const btnBlueAI = $("btnBlueAI");
+  const btnMode = $("btnMode");
+  const btnDepth = $("btnDepth");
+  const btnNPLm = $("btnNPLm");
+  const btnNPLp = $("btnNPLp");
+
+  btnNew.onclick = ()=> { reset(); };
+  btnCancel.onclick = ()=> { selected=null; cloneTargets.clear(); jumpTargets.clear(); game.message=""; game.msgIsErr=false; };
+  btnUndo.onclick = ()=> undo();
+  btnRedo.onclick = ()=> redo();
+
+  btnRedAI.onclick = ()=>{
+    game.aiOn[RED] = !game.aiOn[RED];
+    btnRedAI.classList.toggle("on", game.aiOn[RED]);
+  };
+  btnBlueAI.onclick = ()=>{
+    game.aiOn[BLUE] = !game.aiOn[BLUE];
+    btnBlueAI.classList.toggle("on", game.aiOn[BLUE]);
+  };
+
+  btnMode.onclick = ()=>{
+    game.aiGreedy = !game.aiGreedy;
+  };
+
+  btnDepth.onclick = ()=>{
+    game.aiDepth++;
+    if (game.aiDepth > 4) game.aiDepth = 1;
+  };
+
+  btnNPLm.onclick = ()=>{
+    game.noProgressLimit = Math.max(2, game.noProgressLimit - 2);
+  };
+  btnNPLp.onclick = ()=>{
+    game.noProgressLimit += 2;
+  };
+
+  // -------------------- Render --------------------
+  function drawCircle(cx, cy, rad, fill, stroke=null, strokeW=1){
+    ctx.fillStyle = fill;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI*2);
+    ctx.fill();
+    if (stroke){
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = strokeW;
+      ctx.beginPath();
+      ctx.arc(cx, cy, rad, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+
+  function render(){
+    // bg
+    ctx.fillStyle = rgb(BG);
+    ctx.fillRect(0,0,cv.width,cv.height);
+
+    // board background
+    ctx.fillStyle = rgb(BOARD_COLOR);
+    ctx.beginPath();
+    ctx.roundRect(MARGIN, MARGIN, BOARD_W, BOARD_H, 12);
+    ctx.fill();
+
+    // grid
+    ctx.strokeStyle = rgb(GRID_COLOR);
+    ctx.lineWidth = 1;
+    for (let i=0;i<=GRID;i++){
+      const x = MARGIN + i*CELL;
+      const y = MARGIN + i*CELL;
+      // horizontal
+      ctx.beginPath();
+      ctx.moveTo(MARGIN, y);
+      ctx.lineTo(MARGIN+BOARD_W, y);
+      ctx.stroke();
+      // vertical
+      ctx.beginPath();
+      ctx.moveTo(x, MARGIN);
+      ctx.lineTo(x, MARGIN+BOARD_H);
+      ctx.stroke();
+    }
+
+    // targets
+    for (const key of cloneTargets){
+      const [r,c] = key.split(",").map(Number);
+      const cx = MARGIN + c*CELL + CELL/2;
+      const cy = MARGIN + r*CELL + CELL/2;
+      drawCircle(cx,cy, CELL/6, rgb(CLONE_HINT));
+    }
+    for (const key of jumpTargets){
+      const [r,c] = key.split(",").map(Number);
+      const cx = MARGIN + c*CELL + CELL/2;
+      const cy = MARGIN + r*CELL + CELL/2;
+      drawCircle(cx,cy, CELL/6, rgb(JUMP_HINT));
+    }
+
+    // pieces
+    for (let r=0;r<GRID;r++){
+      for (let c=0;c<GRID;c++){
+        const v = game.board[r][c];
+        if (v===EMPTY) continue;
+        const cx = MARGIN + c*CELL + CELL/2;
+        const cy = MARGIN + r*CELL + CELL/2;
+        const col = (v===RED) ? rgb(RED_COLOR) : rgb(BLUE_COLOR);
+        drawCircle(cx,cy, CELL/2 - 6, col);
+        if (selected && selected[0]===r && selected[1]===c){
+          drawCircle(cx,cy, CELL/2 - 6, "rgba(0,0,0,0)", rgb(SEL_COLOR), 3);
+        }
+      }
+    }
+
+    // panel texts
+    const {r,b,e} = countPieces(game.board);
+    turnLine.textContent = `Turn: ${game.turn===RED ? "Red" : "Blue"}`;
+    scoreLine.textContent = `Red ${r} : ${b} Blue`;
+    emptyLine.textContent = `Empty: ${e}`;
+    npLine.textContent = `No-Progress: ${game.noProgressPlies}/${game.noProgressLimit}`;
+
+    btnMode.textContent = `Mode: ${game.aiGreedy ? "Greedy" : "Minimax"}`;
+    btnDepth.textContent = `Depth: ${game.aiDepth}`;
+
+    msgEl.textContent = game.message || (gameOver() ? `Game Over: ${winner()}` : "");
+    msgEl.classList.toggle("err", !!game.msgIsErr);
+
+    requestAnimationFrame(render);
+  }
+
+  // -------------------- AI loop --------------------
+  let lastAIMs = null;
+  function tickAI(){
+    if (!gameOver() && game.aiOn[game.turn]){
+      const t0 = performance.now();
+      const mv = aiChooseMove();
+      if (!mv){
+        game.message = (game.turn===RED ? "Red" : "Blue") + " (AI) has no moves: Pass";
+        game.msgIsErr = false;
+        advanceTurn();
+      } else {
+        const [sr,sc,dr,dc] = mv;
+        applyMove([sr,sc], [dr,dc]);
+      }
+      const t1 = performance.now();
+      lastAIMs = (t1 - t0);
+      aiTimeEl.textContent = `Last AI: ${lastAIMs.toFixed(0)} ms`;
+      selected = null;
+      cloneTargets.clear();
+      jumpTargets.clear();
+    }
+    // 150ms 간격이면 태블릿에서도 충분히 부드럽고 배터리도 덜 잡아먹음
+    setTimeout(tickAI, 150);
+  }
+
+  // init
+  reset();
+  render();
+  tickAI();
+})();
+</script>
+</body>
+</html>
