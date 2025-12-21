@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Saminsamok (3-Player Gomoku, 4-in-a-row)</title>
+  <style>
+    html, body { margin:0; padding:0; background:#f5f5f5; }
+    canvas { display:block; margin:0 auto; background:#f5f5f5; touch-action:none; }
+  </style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<script>
+(() => {
+  // -----------------------------
+  // Game config
+  // -----------------------------
+  const COLS = 19, ROWS = 19, WIN_N = 4, PLAYERS = 3;
+
+  const P_NAMES = {1:"Black", 2:"White", 3:"Red"};
+  const P_COLORS = {
+    1:[25,25,25],
+    2:[245,245,245],
+    3:[220,45,45]
+  };
+  const P_TEXT = {
+    1:[245,245,245],
+    2:[25,25,25],
+    3:[245,245,245]
+  };
+
+  // -----------------------------
+  // UI config
+  // -----------------------------
+  const CELL = 32, MARGIN = 30, TOPBAR = 90, PANEL_W = 260;
+  const BOARD_W = (COLS - 1) * CELL;
+  const BOARD_H = (ROWS - 1) * CELL;
+  const W = MARGIN*2 + BOARD_W + PANEL_W;
+  const H = MARGIN*2 + TOPBAR + BOARD_H;
+
+  const BG = [245,245,245];
+  const BOARD_BG = [235,210,160];
+  const GRID = [60,60,60];
+  const TEXT = [20,20,20];
+  const MUTED = [90,90,90];
+
+  const BTN_BG = [235,235,235];
+  const BTN_BG_H = [220,235,255];
+  const BTN_BORDER = [80,80,80];
+
+  const HOVER_RING = [20,20,20];
+
+  // -----------------------------
+  // Canvas / HiDPI / fit
+  // -----------------------------
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  let DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  let scale = 1;
+  let offsetX = 0, offsetY = 0;
+  let cssW = W, cssH = H;
+
+  function resize() {
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const vw = window.innerWidth, vh = window.innerHeight;
+
+    // Fit to viewport, do NOT upscale over 1 (keeps crisp like your earlier pages)
+    scale = Math.min(1, Math.min(vw / W, vh / H));
+
+    cssW = Math.floor(W * scale);
+    cssH = Math.floor(H * scale);
+
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+    canvas.width = Math.floor(cssW * DPR);
+    canvas.height = Math.floor(cssH * DPR);
+
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    offsetX = Math.floor((cssW - W * scale) / 2);
+    offsetY = Math.floor((cssH - H * scale) / 2);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // -----------------------------
+  // Helpers
+  // -----------------------------
+  const rgb = (a) => `rgb(${a[0]},${a[1]},${a[2]})`;
+  const inside = (r,c) => (0<=r && r<ROWS && 0<=c && c<COLS);
+
+  function roundRect(x,y,w,h,r){
+    r = Math.max(0, Math.min(r, Math.min(w,h)/2));
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath();
+  }
+
+  function newBoard(){
+    return Array.from({length: ROWS}, () => Array(COLS).fill(0));
+  }
+  function newMoveIndex(){
+    return Array.from({length: ROWS}, () => Array(COLS).fill(0));
+  }
+
+  function cellCenter(r,c){
+    const x0 = MARGIN;
+    const y0 = MARGIN + TOPBAR;
+    return [x0 + c*CELL, y0 + r*CELL];
+  }
+
+  function rcFromMouse(mx,my){
+    const x0 = MARGIN, y0 = MARGIN + TOPBAR;
+    if (mx < x0 - CELL*0.5 || mx > x0 + BOARD_W + CELL*0.5) return null;
+    if (my < y0 - CELL*0.5 || my > y0 + BOARD_H + CELL*0.5) return null;
+
+    const c = Math.round((mx - x0) / CELL);
+    const r = Math.round((my - y0) / CELL);
+    return inside(r,c) ? [r,c] : null;
+  }
+
+  function coordLabel(r,c){
+    const letter = String.fromCharCode("A".charCodeAt(0) + c);
+    return `${letter}${r+1}`;
+  }
+
+  function checkWinner(board){
+    const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+    for (let r=0; r<ROWS; r++){
+      for (let c=0; c<COLS; c++){
+        const p = board[r][c];
+        if (!p) continue;
+        for (const [dr,dc] of dirs){
+          let ok = true;
+          for (let k=1; k<WIN_N; k++){
+            const rr = r + dr*k, cc = c + dc*k;
+            if (!inside(rr,cc) || board[rr][cc] !== p){ ok=false; break; }
+          }
+          if (ok) return p;
+        }
+      }
+    }
+    return 0;
+  }
+
+  function isDraw(board){
+    for (let r=0; r<ROWS; r++){
+      for (let c=0; c<COLS; c++){
+        if (board[r][c] === 0) return false;
+      }
+    }
+    return true;
+  }
+
+  // -----------------------------
+  // Button
+  // -----------------------------
+  class Button {
+    constructor(x,y,w,h,label,fontPx=26){
+      this.x=x; this.y=y; this.w=w; this.h=h;
+      this.label=label;
+      this.fontPx=fontPx;
+      this.hover=false;
+    }
+    contains(px,py){
+      return (this.x<=px && px<=this.x+this.w && this.y<=py && py<=this.y+this.h);
+    }
+    draw(){
+      roundRect(this.x,this.y,this.w,this.h,12);
+      ctx.fillStyle = rgb(this.hover ? BTN_BG_H : BTN_BG);
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = rgb(BTN_BORDER);
+      ctx.stroke();
+
+      ctx.fillStyle = rgb(TEXT);
+      ctx.font = `bold ${this.fontPx}px "Segoe UI", system-ui, -apple-system, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(this.label, this.x+this.w/2, this.y+this.h/2);
+    }
+  }
+
+  // -----------------------------
+  // State
+  // -----------------------------
+  let state = "menu"; // menu | game
+  let board = newBoard();
+  let moveIndex = newMoveIndex();
+  let showNumbers = true;
+
+  let turnPlayer = 1;
+  let winner = 0;
+  let drawFlag = false;
+  let hoverRC = null;
+
+  let movesPlayed = 0;
+  let lastMoveLabel = "";
+
+  function resetGame(toMenu=false){
+    board = newBoard();
+    moveIndex = newMoveIndex();
+    turnPlayer = 1;
+    winner = 0;
+    drawFlag = false;
+    hoverRC = null;
+    movesPlayed = 0;
+    lastMoveLabel = "";
+    if (toMenu) state = "menu";
+  }
+
+  // Buttons
+  const btnStart = new Button(W/2 - 160, H/2 - 20, 320, 64, "Start Game", 26);
+
+  const panelX = MARGIN*2 + BOARD_W + 30;
+  const btnW = PANEL_W - 60;
+  const btnH = 48;
+
+  const toggleBtn  = new Button(panelX, H - MARGIN - 180, btnW, btnH, "Move #: ON", 26);
+  const restartBtn = new Button(panelX, H - MARGIN - 120, btnW, btnH, "Restart", 26);
+  const newGameBtn = new Button(panelX, H - MARGIN - 60,  btnW, btnH, "New Game", 26);
+
+  // -----------------------------
+  // Drawing
+  // -----------------------------
+  function drawBoard(){
+    const x0 = MARGIN, y0 = MARGIN + TOPBAR;
+
+    // wood area slightly bigger than grid
+    roundRect(x0-18, y0-18, BOARD_W+36, BOARD_H+36, 18);
+    ctx.fillStyle = rgb(BOARD_BG);
+    ctx.fill();
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = rgb(GRID);
+
+    // horizontal lines
+    for (let r=0; r<ROWS; r++){
+      const [x1,y1] = cellCenter(r,0);
+      const [x2,y2] = cellCenter(r,COLS-1);
+      ctx.beginPath();
+      ctx.moveTo(x1,y1);
+      ctx.lineTo(x2,y2);
+      ctx.stroke();
+    }
+    // vertical lines
+    for (let c=0; c<COLS; c++){
+      const [x1,y1] = cellCenter(0,c);
+      const [x2,y2] = cellCenter(ROWS-1,c);
+      ctx.beginPath();
+      ctx.moveTo(x1,y1);
+      ctx.lineTo(x2,y2);
+      ctx.stroke();
+    }
+  }
+
+  function drawStones(){
+    const radius = Math.floor(CELL * 0.38);
+
+    for (let r=0; r<ROWS; r++){
+      for (let c=0; c<COLS; c++){
+        const p = board[r][c];
+        if (!p) continue;
+
+        const [cx,cy] = cellCenter(r,c);
+
+        ctx.beginPath();
+        ctx.arc(cx,cy,radius,0,Math.PI*2);
+        ctx.fillStyle = rgb(P_COLORS[p]);
+        ctx.fill();
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgb(0,0,0)";
+        ctx.stroke();
+
+        if (showNumbers){
+          const k = moveIndex[r][c];
+          if (k){
+            ctx.fillStyle = rgb(P_TEXT[p]);
+            ctx.font = `bold 16px "Segoe UI", system-ui, -apple-system, sans-serif`;
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(String(k), cx, cy);
+          }
+        }
+      }
+    }
+  }
+
+  function drawHoverHint(){
+    if (!hoverRC) return;
+    const [r,c] = hoverRC;
+    if (board[r][c] !== 0) return;
+
+    const radius = Math.floor(CELL * 0.38);
+    const [cx,cy] = cellCenter(r,c);
+
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.beginPath();
+    ctx.arc(cx,cy,radius,0,Math.PI*2);
+    ctx.fillStyle = rgb(P_COLORS[turnPlayer]);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.beginPath();
+    ctx.arc(cx,cy,radius+2,0,Math.PI*2);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = rgb(HOVER_RING);
+    ctx.stroke();
+  }
+
+  function drawTopbar(){
+    roundRect(MARGIN, MARGIN, BOARD_W, TOPBAR-12, 16);
+    ctx.fillStyle = "white";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgb(220,220,220)";
+    ctx.stroke();
+
+    let msg = "";
+    if (winner) msg = `${P_NAMES[winner]} wins (4-in-a-row)!`;
+    else if (drawFlag) msg = "Draw!";
+    else msg = `Turn: ${P_NAMES[turnPlayer]}`;
+
+    ctx.fillStyle = rgb(TEXT);
+    ctx.font = `bold 26px "Segoe UI", system-ui, -apple-system, sans-serif`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(msg, MARGIN+18, MARGIN+16);
+
+    if (lastMoveLabel){
+      ctx.fillStyle = rgb(MUTED);
+      ctx.font = `18px "Segoe UI", system-ui, -apple-system, sans-serif`;
+      ctx.fillText(`Last move: ${lastMoveLabel}`, MARGIN+18, MARGIN+50);
+    }
+
+    // Turn stone position (matches your pygame: (MARGIN+180, MARGIN+36))
+    if (!winner && !drawFlag){
+      const cx = MARGIN + 180;
+      const cy = MARGIN + 36;
+      ctx.beginPath();
+      ctx.arc(cx,cy,14,0,Math.PI*2);
+      ctx.fillStyle = rgb(P_COLORS[turnPlayer]);
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgb(0,0,0)";
+      ctx.stroke();
+    }
+  }
+
+  function drawSidePanel(){
+    const px = MARGIN*2 + BOARD_W;
+    const py = MARGIN;
+
+    roundRect(px, py, PANEL_W, H - 2*MARGIN, 16);
+    ctx.fillStyle = "white";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgb(210,210,210)";
+    ctx.stroke();
+
+    let y = py + 18;
+
+    ctx.fillStyle = rgb(TEXT);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.font = `bold 26px "Segoe UI", system-ui, -apple-system, sans-serif`;
+    ctx.fillText("Saminsamok", px+18, y);
+    y += 30;
+    ctx.fillText("(3-Player Gomoku)", px+18, y);
+    y += 42;
+
+    ctx.fillStyle = rgb(MUTED);
+    ctx.font = `18px "Segoe UI", system-ui, -apple-system, sans-serif`;
+    ctx.fillText(`Board: ${COLS} x ${ROWS}`, px+18, y); y += 26;
+    ctx.fillText(`Win: ${WIN_N}-in-a-row`, px+18, y); y += 26;
+    ctx.fillText(`Moves: ${movesPlayed}`, px+18, y); y += 30;
+
+    ctx.fillStyle = rgb(TEXT);
+    ctx.font = `bold 26px "Segoe UI", system-ui, -apple-system, sans-serif`;
+    if (winner) ctx.fillText(`Winner: ${P_NAMES[winner]}`, px+18, y);
+    else if (drawFlag) ctx.fillText("Draw!", px+18, y);
+    else ctx.fillText(`Turn: ${P_NAMES[turnPlayer]}`, px+18, y);
+
+    toggleBtn.draw();
+    restartBtn.draw();
+    newGameBtn.draw();
+  }
+
+  function drawMenu(){
+    ctx.fillStyle = rgb(TEXT);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `bold 42px "Segoe UI", system-ui, -apple-system, sans-serif`;
+    ctx.fillText("Saminsamok", W/2, H/2 - 150);
+    ctx.fillText("(3-Player Gomoku)", W/2, H/2 - 110);
+
+    ctx.fillStyle = rgb(MUTED);
+    ctx.font = `18px "Segoe UI", system-ui, -apple-system, sans-serif`;
+    ctx.fillText("Click Start, then click an intersection to place a stone.", W/2, H/2 - 70);
+
+    btnStart.draw();
+
+    ctx.fillText("Players: Black → White → Red. First to make 4-in-a-row wins.", W/2, H/2 + 90);
+  }
+
+  function render(){
+    // Clear (CSS pixel space)
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+    ctx.clearRect(0,0,canvas.width/DPR,canvas.height/DPR);
+
+    // Logical coords
+    ctx.translate(offsetX, offsetY);
+    ctx.scale(scale, scale);
+
+    ctx.fillStyle = rgb(BG);
+    ctx.fillRect(0,0,W,H);
+
+    if (state === "menu"){
+      drawMenu();
+    } else {
+      drawTopbar();
+      drawBoard();
+      drawStones();
+      drawHoverHint();
+      drawSidePanel();
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  // -----------------------------
+  // Input
+  // -----------------------------
+  function toLogical(clientX, clientY){
+    const rect = canvas.getBoundingClientRect();
+    const x = (clientX - rect.left - offsetX) / scale;
+    const y = (clientY - rect.top  - offsetY) / scale;
+    return [x,y];
+  }
+
+  function updateHover(px,py){
+    if (state === "menu"){
+      btnStart.hover = btnStart.contains(px,py);
+      hoverRC = null;
+      return;
+    }
+    toggleBtn.hover  = toggleBtn.contains(px,py);
+    restartBtn.hover = restartBtn.contains(px,py);
+    newGameBtn.hover = newGameBtn.contains(px,py);
+
+    hoverRC = rcFromMouse(px,py);
+  }
+
+  function handleClick(px,py){
+    if (state === "menu"){
+      if (btnStart.contains(px,py)){
+        state = "game";
+        resetGame(false);
+      }
+      return;
+    }
+
+    // Panel buttons
+    if (toggleBtn.contains(px,py)){
+      showNumbers = !showNumbers;
+      toggleBtn.label = showNumbers ? "Move #: ON" : "Move #: OFF";
+      return;
+    }
+    if (restartBtn.contains(px,py)){
+      resetGame(false);
+      return;
+    }
+    if (newGameBtn.contains(px,py)){
+      resetGame(true);
+      return;
+    }
+
+    // Board click
+    if (winner || drawFlag) return;
+
+    const rc = rcFromMouse(px,py);
+    if (!rc) return;
+    const [r,c] = rc;
+    if (board[r][c] !== 0) return;
+
+    board[r][c] = turnPlayer;
+    movesPlayed += 1;
+    moveIndex[r][c] = movesPlayed;
+    lastMoveLabel = coordLabel(r,c);
+
+    const w = checkWinner(board);
+    if (w) winner = w;
+    else if (isDraw(board)) drawFlag = true;
+    else {
+      turnPlayer += 1;
+      if (turnPlayer > PLAYERS) turnPlayer = 1;
+    }
+  }
+
+  canvas.addEventListener("pointermove", (e) => {
+    const [x,y] = toLogical(e.clientX, e.clientY);
+    updateHover(x,y);
+  });
+
+  canvas.addEventListener("pointerdown", (e) => {
+    const [x,y] = toLogical(e.clientX, e.clientY);
+    updateHover(x,y);
+    handleClick(x,y);
+    e.preventDefault();
+  });
+
+  canvas.addEventListener("pointerleave", () => {
+    btnStart.hover = false;
+    toggleBtn.hover = restartBtn.hover = newGameBtn.hover = false;
+    hoverRC = null;
+  });
+
+  // Start
+  requestAnimationFrame(render);
+})();
+</script>
+</body>
+</html>
