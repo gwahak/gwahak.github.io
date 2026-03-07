@@ -1,0 +1,875 @@
+
+from pathlib import Path
+from math import factorial
+import random
+
+import pygame
+
+EMPTY = 0
+ROCK = 10
+GOAL = 20
+
+FLYING = 1
+SHARK = 2
+OCTOPUS = 5
+
+OCTO_SELF_FLY = 11
+OCTO_SELF_SHARK = 12
+OCTO_ENEMY_FLY = 13
+OCTO_ENEMY_SHARK = 14
+
+ROWS = 5
+COLS = 12
+NUM_LAYOUTS = 1680
+
+BG_COLOR = (245, 248, 252)
+GRID_COLOR = (25, 35, 45)
+WATER_COLOR = (217, 242, 255)
+ROCK_COLOR = (100, 100, 100)
+GOAL_COLOR = (255, 217, 102)
+TEXT_COLOR = (20, 25, 35)
+A_COLOR = (30, 90, 180)
+B_COLOR = (180, 60, 60)
+A_TERRITORY_COLOR = (170, 205, 234)
+B_TERRITORY_COLOR = (236, 188, 188)
+SELECT_COLOR = (255, 180, 0)
+LEGAL_COLOR = (90, 200, 120)
+CAPTURE_COLOR = (220, 120, 120)
+WIN_COLOR = (255, 210, 90)
+BUTTON_COLOR = (232, 236, 242)
+BUTTON_ACTIVE = (200, 225, 255)
+BUTTON_BORDER = (80, 90, 110)
+INPUT_BG = (255, 255, 255)
+INPUT_ACTIVE = (255, 248, 210)
+ERROR_COLOR = (180, 50, 50)
+
+CELL = 72
+PADDING = 24
+TOP_UI = 210
+
+WINDOW_W = COLS * CELL + PADDING * 2
+WINDOW_H = ROWS * CELL + PADDING * 2 + TOP_UI
+
+FPS = 60
+
+
+def sign(x):
+    if x > 0:
+        return 1
+    if x < 0:
+        return -1
+    return 0
+
+
+def multinomial_count(counts):
+    total = sum(counts.values())
+    result = factorial(total)
+    for v in counts.values():
+        result //= factorial(v)
+    return result
+
+
+def unrank_3x3_layout(rank):
+    if not (0 <= rank < NUM_LAYOUTS):
+        raise ValueError(f"rank must be in 0..{NUM_LAYOUTS - 1}")
+
+    counts = {"S": 3, "O": 3, "F": 3}
+    symbols = ["S", "O", "F"]
+    result = []
+
+    for _ in range(9):
+        for sym in symbols:
+            if counts[sym] == 0:
+                continue
+            counts[sym] -= 1
+            cnt = multinomial_count(counts)
+            if rank < cnt:
+                result.append(sym)
+                break
+            rank -= cnt
+            counts[sym] += 1
+
+    return result
+
+
+def to_grid(layout):
+    return [layout[0:3], layout[3:6], layout[6:9]]
+
+
+def mirror_lr(grid):
+    return [list(reversed(row)) for row in grid]
+
+
+def layout_from_ui_number(number):
+    if not (1 <= number <= NUM_LAYOUTS):
+        raise ValueError(f"number must be in 1..{NUM_LAYOUTS}")
+    return to_grid(unrank_3x3_layout(number - 1))
+
+
+def normalize_layout_text(text):
+    return text.strip().upper().replace(" ", "")
+
+
+def parse_layout_spec(spec):
+    s = normalize_layout_text(spec)
+    if not s:
+        raise ValueError("빈 입력입니다.")
+
+    if s.isdigit():
+        return layout_from_ui_number(int(s))
+
+    parts = s.split("/")
+    if len(parts) == 3 and all(len(p) == 3 for p in parts):
+        chars = [ch for row in parts for ch in row]
+        if any(ch not in ("S", "F", "O") for ch in chars):
+            raise ValueError("S, F, O만 사용할 수 있습니다.")
+        if chars.count("S") != 3 or chars.count("F") != 3 or chars.count("O") != 3:
+            raise ValueError("S, F, O는 각각 3개씩이어야 합니다.")
+        return [list(parts[0]), list(parts[1]), list(parts[2])]
+
+    raise ValueError("번호(1~1680) 또는 SFO/SFO/SFO 형식으로 입력하세요.")
+
+
+def grid_to_text(grid):
+    return "/".join("".join(row) for row in grid)
+
+
+def find_layout_number_from_grid(grid):
+    target = tuple(ch for row in grid for ch in row)
+    counts = {"S": 3, "O": 3, "F": 3}
+    symbols = ["S", "O", "F"]
+    rank = 0
+
+    for ch in target:
+        for sym in symbols:
+            if counts[sym] == 0:
+                continue
+            if sym == ch:
+                counts[sym] -= 1
+                break
+            counts[sym] -= 1
+            rank += multinomial_count(counts)
+            counts[sym] += 1
+    return rank + 1
+
+
+def display_layout_number(grid, side):
+    # B 쪽은 좌우반전된 모습을 보여주므로, 번호 계산은 다시 원래 방향으로 되돌려서 한다.
+    canonical = mirror_lr(grid) if side == "B" else grid
+    return find_layout_number_from_grid(canonical)
+
+
+def apply_two_layouts(board, a_grid, b_grid):
+    piece_map_a = {"S": SHARK, "O": OCTOPUS, "F": FLYING}
+    piece_map_b = {"S": -SHARK, "O": -OCTOPUS, "F": -FLYING}
+
+    for i in range(3):
+        for j in range(3):
+            board[1 + i][1 + j] = piece_map_a[a_grid[i][j]]
+            board[1 + i][8 + j] = piece_map_b[b_grid[i][j]]
+
+
+def make_initial_board(a_grid, b_grid):
+    board = [[EMPTY for _ in range(COLS)] for _ in range(ROWS)]
+
+    for r in range(ROWS):
+        if r != 2:
+            board[r][0] = ROCK
+            board[r][11] = ROCK
+
+    board[2][0] = GOAL
+    board[2][11] = GOAL
+    apply_two_layouts(board, a_grid, b_grid)
+    return board
+
+
+def random_grid():
+    return layout_from_ui_number(random.randint(1, NUM_LAYOUTS))
+
+
+def side_of(cell):
+    return sign(cell)
+
+
+def abs_code(cell):
+    return abs(cell)
+
+
+def is_piece(cell):
+    return cell not in (EMPTY, ROCK, GOAL)
+
+
+def is_octopus(cell):
+    return abs(cell) in {OCTOPUS, OCTO_SELF_FLY, OCTO_SELF_SHARK, OCTO_ENEMY_FLY, OCTO_ENEMY_SHARK}
+
+
+def is_shark(cell):
+    return abs(cell) == SHARK
+
+
+def is_flying(cell):
+    return abs(cell) == FLYING
+
+
+def is_octopus_carrying(cell):
+    return abs(cell) in {OCTO_SELF_FLY, OCTO_SELF_SHARK, OCTO_ENEMY_FLY, OCTO_ENEMY_SHARK}
+
+
+def carried_piece_info(cell):
+    c = abs(cell)
+    if c == OCTO_SELF_FLY:
+        return ("ally", FLYING)
+    if c == OCTO_SELF_SHARK:
+        return ("ally", SHARK)
+    if c == OCTO_ENEMY_FLY:
+        return ("enemy", FLYING)
+    if c == OCTO_ENEMY_SHARK:
+        return ("enemy", SHARK)
+    return None
+
+
+def make_octopus_code(octo_side, carried_side, carried_piece):
+    if octo_side == carried_side:
+        if carried_piece == FLYING:
+            return octo_side * OCTO_SELF_FLY
+        if carried_piece == SHARK:
+            return octo_side * OCTO_SELF_SHARK
+    else:
+        if carried_piece == FLYING:
+            return octo_side * OCTO_ENEMY_FLY
+        if carried_piece == SHARK:
+            return octo_side * OCTO_ENEMY_SHARK
+    raise ValueError("Invalid carried piece for octopus")
+
+
+def octopus_drop_piece(cell):
+    info = carried_piece_info(cell)
+    if info is None:
+        return None
+    carry_side_desc, carry_piece = info
+    octo_side = side_of(cell)
+    carried_side = octo_side if carry_side_desc == "ally" else -octo_side
+    return carried_side * carry_piece
+
+
+def octopus_base_piece(cell):
+    return side_of(cell) * OCTOPUS
+
+
+def winning_display_piece(cell, move_kind=None):
+    if move_kind == "drop_and_win":
+        return octopus_base_piece(cell)
+    return cell
+
+
+def piece_label(cell, lift_mode=False, viewer_side=1):
+    if cell == EMPTY:
+        return ""
+    if cell == ROCK:
+        return "ROCK"
+    if cell == GOAL:
+        return "★"
+
+    s = side_of(cell)
+    sign_txt = "A" if s == 1 else "B"
+    c = abs_code(cell)
+
+    if c == FLYING:
+        return f"{sign_txt}F"
+    if c == SHARK:
+        return f"{sign_txt}S"
+    if c == OCTOPUS:
+        return f"{sign_txt}O"
+
+    info = carried_piece_info(cell)
+    if info is None:
+        return f"{sign_txt}?"
+    carry_side_desc, carry_piece = info
+    carry_short = "F" if carry_piece == FLYING else "S"
+
+    if lift_mode and s == viewer_side:
+        prefix = "a" if carry_side_desc == "ally" else "e"
+        return f"{sign_txt}O({prefix}{carry_short})"
+    return f"{sign_txt}O"
+
+
+def in_team_territory(r, c):
+    return (1 <= r <= 3) and ((1 <= c <= 3) or (8 <= c <= 10))
+
+
+def territory_owner(c):
+    if 1 <= c <= 3:
+        return 1
+    if 8 <= c <= 10:
+        return -1
+    return 0
+
+
+def enemy_goal_col(side):
+    return 11 if side == 1 else 0
+
+
+def in_bounds(r, c):
+    return 0 <= r < ROWS and 0 <= c < COLS
+
+
+def common_move_dirs(side):
+    forward = (0, 1) if side == 1 else (0, -1)
+    up = (-1, 0)
+    down = (1, 0)
+    forward_up = (-1, 1) if side == 1 else (-1, -1)
+    forward_down = (1, 1) if side == 1 else (1, -1)
+    return [forward, up, down, forward_up, forward_down]
+
+
+def add_flying_chain_jumps(board, r, c, side, moves):
+    seen = set()
+    for dr, dc in common_move_dirs(side):
+        cur_r, cur_c = r, c
+        while True:
+            mid_r, mid_c = cur_r + dr, cur_c + dc
+            land_r, land_c = cur_r + 2 * dr, cur_c + 2 * dc
+
+            if not in_bounds(mid_r, mid_c) or not in_bounds(land_r, land_c):
+                break
+
+            middle = board[mid_r][mid_c]
+            landing = board[land_r][land_c]
+
+            if not is_piece(middle):
+                break
+            if landing == ROCK:
+                break
+
+            if landing == GOAL:
+                if land_c == enemy_goal_col(side):
+                    key = ((land_r, land_c), "win_jump")
+                    if key not in seen:
+                        moves.append({"to": (land_r, land_c), "kind": "win_jump"})
+                        seen.add(key)
+                break
+
+            if landing != EMPTY:
+                break
+
+            key = ((land_r, land_c), "jump")
+            if key not in seen:
+                moves.append({"to": (land_r, land_c), "kind": "jump"})
+                seen.add(key)
+
+            cur_r, cur_c = land_r, land_c
+
+
+def get_legal_moves(board, r, c, lift_mode=False):
+    cell = board[r][c]
+    if not is_piece(cell):
+        return []
+
+    side = side_of(cell)
+    abs_piece = abs_code(cell)
+    carrying = is_octopus_carrying(cell)
+    moves = []
+
+    for dr, dc in common_move_dirs(side):
+        nr, nc = r + dr, c + dc
+        if not in_bounds(nr, nc):
+            continue
+
+        dst = board[nr][nc]
+        if dst == ROCK:
+            continue
+
+        if dst == GOAL:
+            if nc == enemy_goal_col(side):
+                if carrying and lift_mode:
+                    moves.append({"to": (nr, nc), "kind": "drop_and_win"})
+                else:
+                    moves.append({"to": (nr, nc), "kind": "win"})
+            continue
+
+        if dst == EMPTY:
+            if carrying and lift_mode:
+                moves.append({"to": (nr, nc), "kind": "drop_move"})
+            else:
+                moves.append({"to": (nr, nc), "kind": "move"})
+            continue
+
+        if side_of(dst) == side:
+            if abs_piece == OCTOPUS and not carrying and abs_code(dst) in (SHARK, FLYING):
+                moves.append({"to": (nr, nc), "kind": "cover"})
+            elif is_octopus(cell) and carrying and abs_code(dst) in (SHARK, FLYING):
+                moves.append({"to": (nr, nc), "kind": "cover_drop"})
+            continue
+
+        if is_shark(cell):
+            moves.append({"to": (nr, nc), "kind": "capture"})
+        elif abs_piece == OCTOPUS and not carrying and abs_code(dst) in (SHARK, FLYING):
+            moves.append({"to": (nr, nc), "kind": "cover"})
+        elif is_octopus(cell) and carrying and abs_code(dst) in (SHARK, FLYING):
+            moves.append({"to": (nr, nc), "kind": "cover_drop"})
+
+    if is_flying(cell):
+        add_flying_chain_jumps(board, r, c, side, moves)
+
+    return moves
+
+
+def apply_move(board, src, move, lift_mode=False):
+    r, c = src
+    nr, nc = move["to"]
+    cell = board[r][c]
+    kind = move["kind"]
+    side = side_of(cell)
+
+    new_board = [row[:] for row in board]
+    winner = None
+
+    if kind in ("win", "win_jump", "drop_and_win"):
+        if kind == "drop_and_win":
+            dropped = octopus_drop_piece(cell)
+            new_board[r][c] = dropped if dropped is not None else EMPTY
+        else:
+            new_board[r][c] = EMPTY
+        winner = side
+        return new_board, winner
+
+    if kind in ("move", "jump"):
+        new_board[nr][nc] = cell
+        new_board[r][c] = EMPTY
+        return new_board, winner
+
+    if kind == "capture":
+        new_board[nr][nc] = cell
+        new_board[r][c] = EMPTY
+        return new_board, winner
+
+    if kind == "cover":
+        dst = new_board[nr][nc]
+        carried_side = side_of(dst)
+        carried_piece = abs_code(dst)
+        new_board[nr][nc] = make_octopus_code(side, carried_side, carried_piece)
+        new_board[r][c] = EMPTY
+        return new_board, winner
+
+    if kind == "cover_drop":
+        dst = new_board[nr][nc]
+        carried_side = side_of(dst)
+        carried_piece = abs_code(dst)
+        dropped = octopus_drop_piece(cell)
+        new_board[r][c] = dropped if dropped is not None else EMPTY
+        new_board[nr][nc] = make_octopus_code(side, carried_side, carried_piece)
+        return new_board, winner
+
+    if kind == "drop_move":
+        dropped = octopus_drop_piece(cell)
+        new_board[r][c] = dropped if dropped is not None else EMPTY
+        new_board[nr][nc] = octopus_base_piece(cell)
+        return new_board, winner
+
+    raise ValueError(f"Unknown move kind: {kind}")
+
+
+def board_to_screen(r, c):
+    x = PADDING + c * CELL
+    y = TOP_UI + PADDING + r * CELL
+    return pygame.Rect(x, y, CELL, CELL)
+
+
+def screen_to_board(pos):
+    x, y = pos
+    bx = x - PADDING
+    by = y - (TOP_UI + PADDING)
+    if bx < 0 or by < 0:
+        return None
+    c = bx // CELL
+    r = by // CELL
+    if 0 <= r < ROWS and 0 <= c < COLS:
+        return int(r), int(c)
+    return None
+
+
+def draw_text_center(surface, text, font, color, rect):
+    img = font.render(text, True, color)
+    img_rect = img.get_rect(center=rect.center)
+    surface.blit(img, img_rect)
+
+
+def draw_button(surface, rect, text, font, active=False):
+    color = BUTTON_ACTIVE if active else BUTTON_COLOR
+    pygame.draw.rect(surface, color, rect, border_radius=10)
+    pygame.draw.rect(surface, BUTTON_BORDER, rect, 2, border_radius=10)
+    draw_text_center(surface, text, font, TEXT_COLOR, rect)
+
+
+def draw_input_box(surface, rect, text, font, active=False):
+    color = INPUT_ACTIVE if active else INPUT_BG
+    pygame.draw.rect(surface, color, rect, border_radius=8)
+    pygame.draw.rect(surface, BUTTON_BORDER, rect, 2, border_radius=8)
+    img = font.render(text, True, TEXT_COLOR)
+    surface.blit(img, (rect.x + 8, rect.y + 7))
+
+
+def move_kind_color(kind):
+    if "win" in kind:
+        return WIN_COLOR
+    if kind == "capture":
+        return CAPTURE_COLOR
+    if kind in ("cover", "cover_drop"):
+        return (180, 120, 220)
+    if kind == "drop_move":
+        return (120, 200, 220)
+    return LEGAL_COLOR
+
+
+def draw_layout_preview(screen, font, a_grid, b_grid):
+    preview_x = WINDOW_W - 250
+    preview_y = 14
+    size = 22
+    gap = 4
+
+    try:
+        a_num_text = str(display_layout_number(a_grid, "A"))
+    except Exception:
+        a_num_text = "-"
+
+    try:
+        b_num_text = str(display_layout_number(b_grid, "B"))
+    except Exception:
+        b_num_text = "-"
+
+    title = font.render("A / B preview", True, TEXT_COLOR)
+    screen.blit(title, (preview_x, preview_y))
+
+    a_label = font.render(f"A #{a_num_text}", True, A_COLOR)
+    b_label = font.render(f"B #{b_num_text}", True, B_COLOR)
+    screen.blit(a_label, (preview_x, preview_y + 24))
+    screen.blit(b_label, (preview_x + 118, preview_y + 24))
+
+    for grid, x0 in [(a_grid, preview_x), (b_grid, preview_x + 118)]:
+        for i in range(3):
+            for j in range(3):
+                rect = pygame.Rect(x0 + j * (size + gap), preview_y + 48 + i * (size + gap), size, size)
+                pygame.draw.rect(screen, (240, 244, 248), rect)
+                pygame.draw.rect(screen, BUTTON_BORDER, rect, 1)
+                draw_text_center(screen, grid[i][j], font, TEXT_COLOR, rect)
+
+
+def draw_board(screen, board, fonts, controls, a_text, b_text, a_grid, b_grid, mirror_b,
+               current_turn=1, lift_mode=False, selected=None, legal_moves=None,
+               winner=None, winning_piece=None, winning_goal=None, error_msg=""):
+    small_font, cell_font, title_font = fonts
+
+    screen.fill(BG_COLOR)
+
+    status = f"Winner: {'A' if winner == 1 else 'B'}" if winner is not None else f"Turn: {'A' if current_turn == 1 else 'B'} | Lift: {'ON' if lift_mode else 'OFF'}"
+    title = f"Aquatika prototype | {status}"
+    screen.blit(title_font.render(title, True, TEXT_COLOR), (PADDING, 18))
+    screen.blit(small_font.render("A/B 입력: 1~1680 또는 SFO/SFO/SFO", True, (70, 80, 95)), (PADDING, 54))
+
+    screen.blit(small_font.render("A", True, A_COLOR), (PADDING, 92))
+    screen.blit(small_font.render("B", True, B_COLOR), (PADDING, 134))
+
+    draw_input_box(screen, controls["input_a"], a_text, small_font, active=(controls["active_input"] == "a"))
+    draw_input_box(screen, controls["input_b"], b_text, small_font, active=(controls["active_input"] == "b"))
+
+    for name, rect in controls["buttons"].items():
+        label = {
+            "random_a": "A랜덤",
+            "random_b": "B랜덤",
+            "mirror_b": "B대칭",
+            "apply": "적용",
+            "lift": "Lift",
+            "reset": "리셋",
+        }[name]
+        active = (name == "lift" and lift_mode) or (name == "mirror_b" and mirror_b)
+        draw_button(screen, rect, label, small_font, active=active)
+
+    if error_msg:
+        screen.blit(small_font.render(error_msg, True, ERROR_COLOR), (PADDING + 448, 134))
+
+    draw_layout_preview(screen, small_font, a_grid, b_grid)
+
+    legal_lookup = {}
+    if legal_moves:
+        for mv in legal_moves:
+            legal_lookup[mv["to"]] = mv["kind"]
+
+    for r in range(ROWS):
+        for c in range(COLS):
+            rect = board_to_screen(r, c)
+            cell = board[r][c]
+
+            if cell == ROCK:
+                face = ROCK_COLOR
+            elif cell == GOAL:
+                face = GOAL_COLOR
+            else:
+                face = WATER_COLOR
+
+            if cell not in (ROCK, GOAL) and in_team_territory(r, c):
+                owner = territory_owner(c)
+                face = A_TERRITORY_COLOR if owner == 1 else B_TERRITORY_COLOR
+
+            pygame.draw.rect(screen, face, rect)
+            pygame.draw.rect(screen, GRID_COLOR, rect, 2)
+
+            if selected == (r, c):
+                pygame.draw.rect(screen, SELECT_COLOR, rect, 4)
+
+            goal_highlight = (r, c) in legal_lookup and cell == GOAL
+            if (r, c) in legal_lookup and cell != GOAL:
+                color = move_kind_color(legal_lookup[(r, c)])
+                inner = rect.inflate(-26, -26)
+                pygame.draw.ellipse(screen, color, inner)
+
+            if cell == GOAL:
+                if winner is not None and winning_goal == (r, c) and winning_piece is not None:
+                    label = piece_label(winning_piece, lift_mode=False, viewer_side=winner)
+                    color = A_COLOR if side_of(winning_piece) == 1 else B_COLOR
+                    draw_text_center(screen, label, cell_font, color, rect)
+                else:
+                    draw_text_center(screen, "★", cell_font, TEXT_COLOR, rect)
+
+                if goal_highlight:
+                    color = move_kind_color(legal_lookup[(r, c)])
+                    glow = rect.inflate(-8, -8)
+                    pygame.draw.rect(screen, color, glow, 6, border_radius=12)
+            elif cell == ROCK:
+                draw_text_center(screen, "#", cell_font, (230, 230, 230), rect)
+            elif cell != EMPTY:
+                label = piece_label(cell, lift_mode=lift_mode, viewer_side=current_turn)
+                color = A_COLOR if side_of(cell) == 1 else B_COLOR
+                draw_text_center(screen, label, cell_font, color, rect)
+
+    for c in range(COLS):
+        rect = board_to_screen(0, c)
+        img = small_font.render(str(c), True, TEXT_COLOR)
+        pos = img.get_rect(center=(rect.centerx, TOP_UI + 10))
+        screen.blit(img, pos)
+
+    for r in range(ROWS):
+        rect = board_to_screen(r, 0)
+        img = small_font.render(str(r), True, TEXT_COLOR)
+        pos = img.get_rect(center=(12, rect.centery))
+        screen.blit(img, pos)
+
+
+def create_controls():
+    input_a = pygame.Rect(PADDING + 24, 86, 240, 34)
+    input_b = pygame.Rect(PADDING + 24, 128, 240, 34)
+    buttons = {
+        "random_a": pygame.Rect(PADDING + 276, 86, 72, 34),
+        "random_b": pygame.Rect(PADDING + 276, 128, 72, 34),
+        "mirror_b": pygame.Rect(PADDING + 358, 128, 78, 34),
+        "apply": pygame.Rect(PADDING + 358, 86, 84, 34),
+        "lift": pygame.Rect(PADDING + 452, 86, 58, 34),
+        "reset": pygame.Rect(PADDING + 520, 86, 66, 34),
+    }
+    return {
+        "input_a": input_a,
+        "input_b": input_b,
+        "buttons": buttons,
+        "active_input": None,
+    }
+
+
+def reset_game(a_grid, b_grid):
+    return {
+        "board": make_initial_board(a_grid, b_grid),
+        "current_turn": 1,
+        "lift_mode": False,
+        "selected": None,
+        "legal_moves": [],
+        "winner": None,
+        "winning_piece": None,
+        "winning_goal": None,
+    }
+
+
+def resolve_input_pair(a_text, b_text, mirror_b):
+    a_grid = parse_layout_spec(a_text)
+    if mirror_b:
+        b_grid = mirror_lr(a_grid)
+    else:
+        b_grid = parse_layout_spec(b_text)
+    return a_grid, b_grid
+
+
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
+    pygame.display.set_caption("Aquatika Pygame Prototype")
+    clock = pygame.time.Clock()
+
+    small_font = pygame.font.SysFont("malgungothic", 20)
+    cell_font = pygame.font.SysFont("malgungothic", 24, bold=True)
+    title_font = pygame.font.SysFont("malgungothic", 24, bold=True)
+
+    controls = create_controls()
+    a_text = "1"
+    b_text = "1"
+    mirror_b = True
+    error_msg = ""
+
+    a_grid, b_grid = resolve_input_pair(a_text, b_text, mirror_b)
+    state = reset_game(a_grid, b_grid)
+
+    running = True
+    while running:
+        clock.tick(FPS)
+
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+            elif event.type == pygame.KEYDOWN:
+                if controls["active_input"] is not None:
+                    key = "a" if controls["active_input"] == "a" else "b"
+                    current = a_text if key == "a" else b_text
+                    if event.key == pygame.K_BACKSPACE:
+                        current = current[:-1]
+                    elif event.key == pygame.K_RETURN:
+                        try:
+                            a_grid, b_grid = resolve_input_pair(a_text, b_text, mirror_b)
+                            state = reset_game(a_grid, b_grid)
+                            error_msg = ""
+                        except ValueError as e:
+                            error_msg = str(e)
+                    else:
+                        ch = event.unicode
+                        if ch and ch.isprintable():
+                            current += ch
+                    if key == "a":
+                        a_text = current
+                        if mirror_b:
+                            try:
+                                a_grid = parse_layout_spec(a_text)
+                                b_grid = mirror_lr(a_grid)
+                                b_text = str(display_layout_number(b_grid, "B"))
+                                error_msg = ""
+                            except Exception:
+                                pass
+                    else:
+                        b_text = current
+                else:
+                    if event.key == pygame.K_r:
+                        state = reset_game(a_grid, b_grid)
+                    elif state["winner"] is None and event.key == pygame.K_l:
+                        state["lift_mode"] = not state["lift_mode"]
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                pos = event.pos
+
+                if controls["input_a"].collidepoint(pos):
+                    controls["active_input"] = "a"
+                    continue
+                if controls["input_b"].collidepoint(pos):
+                    controls["active_input"] = "b"
+                    continue
+                controls["active_input"] = None
+
+                clicked_button = None
+                for name, rect in controls["buttons"].items():
+                    if rect.collidepoint(pos):
+                        clicked_button = name
+                        break
+
+                if clicked_button is not None:
+                    try:
+                        if clicked_button == "random_a":
+                            a_grid = random_grid()
+                            a_text = str(display_layout_number(a_grid, "A"))
+                            if mirror_b:
+                                b_grid = mirror_lr(a_grid)
+                                b_text = str(display_layout_number(b_grid, "B"))
+                        elif clicked_button == "random_b":
+                            if mirror_b:
+                                mirror_b = False
+                            b_grid = random_grid()
+                            b_text = str(display_layout_number(b_grid, "B"))
+                        elif clicked_button == "mirror_b":
+                            mirror_b = not mirror_b
+                            if mirror_b:
+                                a_grid = parse_layout_spec(a_text)
+                                b_grid = mirror_lr(a_grid)
+                                b_text = str(display_layout_number(b_grid, "B"))
+                        elif clicked_button == "apply":
+                            a_grid, b_grid = resolve_input_pair(a_text, b_text, mirror_b)
+                            state = reset_game(a_grid, b_grid)
+                        elif clicked_button == "lift" and state["winner"] is None:
+                            state["lift_mode"] = not state["lift_mode"]
+                        elif clicked_button == "reset":
+                            state = reset_game(a_grid, b_grid)
+                        error_msg = ""
+                    except ValueError as e:
+                        error_msg = str(e)
+                    continue
+
+                if state["winner"] is not None:
+                    continue
+
+                pos_rc = screen_to_board(pos)
+                if pos_rc is None:
+                    continue
+                r, c = pos_rc
+                cell = state["board"][r][c]
+
+                if state["selected"] is None:
+                    if is_piece(cell) and side_of(cell) == state["current_turn"]:
+                        state["selected"] = (r, c)
+                        state["legal_moves"] = get_legal_moves(state["board"], r, c, lift_mode=state["lift_mode"])
+                else:
+                    chosen = None
+                    for mv in state["legal_moves"]:
+                        if mv["to"] == (r, c):
+                            chosen = mv
+                            break
+
+                    if chosen is not None:
+                        src_r, src_c = state["selected"]
+                        moving_cell = state["board"][src_r][src_c]
+                        state["board"], state["winner"] = apply_move(
+                            state["board"], state["selected"], chosen, lift_mode=state["lift_mode"]
+                        )
+                        if state["winner"] is not None:
+                            state["winning_piece"] = winning_display_piece(moving_cell, chosen["kind"])
+                            state["winning_goal"] = chosen["to"]
+                        state["selected"] = None
+                        state["legal_moves"] = []
+                        state["lift_mode"] = False
+                        if state["winner"] is None:
+                            state["current_turn"] *= -1
+                    else:
+                        if is_piece(cell) and side_of(cell) == state["current_turn"]:
+                            state["selected"] = (r, c)
+                            state["legal_moves"] = get_legal_moves(state["board"], r, c, lift_mode=state["lift_mode"])
+                        else:
+                            state["selected"] = None
+                            state["legal_moves"] = []
+
+        draw_board(
+            screen,
+            state["board"],
+            fonts=(small_font, cell_font, title_font),
+            controls=controls,
+            a_text=a_text,
+            b_text=b_text,
+            a_grid=a_grid,
+            b_grid=b_grid,
+            mirror_b=mirror_b,
+            current_turn=state["current_turn"],
+            lift_mode=state["lift_mode"],
+            selected=state["selected"],
+            legal_moves=state["legal_moves"],
+            winner=state["winner"],
+            winning_piece=state["winning_piece"],
+            winning_goal=state["winning_goal"],
+            error_msg=error_msg,
+        )
+        pygame.display.flip()
+
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()
