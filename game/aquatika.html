@@ -1,875 +1,1443 @@
-
-from pathlib import Path
-from math import factorial
-import random
-
-import pygame
-
-EMPTY = 0
-ROCK = 10
-GOAL = 20
-
-FLYING = 1
-SHARK = 2
-OCTOPUS = 5
-
-OCTO_SELF_FLY = 11
-OCTO_SELF_SHARK = 12
-OCTO_ENEMY_FLY = 13
-OCTO_ENEMY_SHARK = 14
-
-ROWS = 5
-COLS = 12
-NUM_LAYOUTS = 1680
-
-BG_COLOR = (245, 248, 252)
-GRID_COLOR = (25, 35, 45)
-WATER_COLOR = (217, 242, 255)
-ROCK_COLOR = (100, 100, 100)
-GOAL_COLOR = (255, 217, 102)
-TEXT_COLOR = (20, 25, 35)
-A_COLOR = (30, 90, 180)
-B_COLOR = (180, 60, 60)
-A_TERRITORY_COLOR = (170, 205, 234)
-B_TERRITORY_COLOR = (236, 188, 188)
-SELECT_COLOR = (255, 180, 0)
-LEGAL_COLOR = (90, 200, 120)
-CAPTURE_COLOR = (220, 120, 120)
-WIN_COLOR = (255, 210, 90)
-BUTTON_COLOR = (232, 236, 242)
-BUTTON_ACTIVE = (200, 225, 255)
-BUTTON_BORDER = (80, 90, 110)
-INPUT_BG = (255, 255, 255)
-INPUT_ACTIVE = (255, 248, 210)
-ERROR_COLOR = (180, 50, 50)
-
-CELL = 72
-PADDING = 24
-TOP_UI = 210
-
-WINDOW_W = COLS * CELL + PADDING * 2
-WINDOW_H = ROWS * CELL + PADDING * 2 + TOP_UI
-
-FPS = 60
-
-
-def sign(x):
-    if x > 0:
-        return 1
-    if x < 0:
-        return -1
-    return 0
-
-
-def multinomial_count(counts):
-    total = sum(counts.values())
-    result = factorial(total)
-    for v in counts.values():
-        result //= factorial(v)
-    return result
-
-
-def unrank_3x3_layout(rank):
-    if not (0 <= rank < NUM_LAYOUTS):
-        raise ValueError(f"rank must be in 0..{NUM_LAYOUTS - 1}")
-
-    counts = {"S": 3, "O": 3, "F": 3}
-    symbols = ["S", "O", "F"]
-    result = []
-
-    for _ in range(9):
-        for sym in symbols:
-            if counts[sym] == 0:
-                continue
-            counts[sym] -= 1
-            cnt = multinomial_count(counts)
-            if rank < cnt:
-                result.append(sym)
-                break
-            rank -= cnt
-            counts[sym] += 1
-
-    return result
-
-
-def to_grid(layout):
-    return [layout[0:3], layout[3:6], layout[6:9]]
-
-
-def mirror_lr(grid):
-    return [list(reversed(row)) for row in grid]
-
-
-def layout_from_ui_number(number):
-    if not (1 <= number <= NUM_LAYOUTS):
-        raise ValueError(f"number must be in 1..{NUM_LAYOUTS}")
-    return to_grid(unrank_3x3_layout(number - 1))
-
-
-def normalize_layout_text(text):
-    return text.strip().upper().replace(" ", "")
-
-
-def parse_layout_spec(spec):
-    s = normalize_layout_text(spec)
-    if not s:
-        raise ValueError("빈 입력입니다.")
-
-    if s.isdigit():
-        return layout_from_ui_number(int(s))
-
-    parts = s.split("/")
-    if len(parts) == 3 and all(len(p) == 3 for p in parts):
-        chars = [ch for row in parts for ch in row]
-        if any(ch not in ("S", "F", "O") for ch in chars):
-            raise ValueError("S, F, O만 사용할 수 있습니다.")
-        if chars.count("S") != 3 or chars.count("F") != 3 or chars.count("O") != 3:
-            raise ValueError("S, F, O는 각각 3개씩이어야 합니다.")
-        return [list(parts[0]), list(parts[1]), list(parts[2])]
-
-    raise ValueError("번호(1~1680) 또는 SFO/SFO/SFO 형식으로 입력하세요.")
-
-
-def grid_to_text(grid):
-    return "/".join("".join(row) for row in grid)
-
-
-def find_layout_number_from_grid(grid):
-    target = tuple(ch for row in grid for ch in row)
-    counts = {"S": 3, "O": 3, "F": 3}
-    symbols = ["S", "O", "F"]
-    rank = 0
-
-    for ch in target:
-        for sym in symbols:
-            if counts[sym] == 0:
-                continue
-            if sym == ch:
-                counts[sym] -= 1
-                break
-            counts[sym] -= 1
-            rank += multinomial_count(counts)
-            counts[sym] += 1
-    return rank + 1
-
-
-def display_layout_number(grid, side):
-    # B 쪽은 좌우반전된 모습을 보여주므로, 번호 계산은 다시 원래 방향으로 되돌려서 한다.
-    canonical = mirror_lr(grid) if side == "B" else grid
-    return find_layout_number_from_grid(canonical)
-
-
-def apply_two_layouts(board, a_grid, b_grid):
-    piece_map_a = {"S": SHARK, "O": OCTOPUS, "F": FLYING}
-    piece_map_b = {"S": -SHARK, "O": -OCTOPUS, "F": -FLYING}
-
-    for i in range(3):
-        for j in range(3):
-            board[1 + i][1 + j] = piece_map_a[a_grid[i][j]]
-            board[1 + i][8 + j] = piece_map_b[b_grid[i][j]]
-
-
-def make_initial_board(a_grid, b_grid):
-    board = [[EMPTY for _ in range(COLS)] for _ in range(ROWS)]
-
-    for r in range(ROWS):
-        if r != 2:
-            board[r][0] = ROCK
-            board[r][11] = ROCK
-
-    board[2][0] = GOAL
-    board[2][11] = GOAL
-    apply_two_layouts(board, a_grid, b_grid)
-    return board
-
-
-def random_grid():
-    return layout_from_ui_number(random.randint(1, NUM_LAYOUTS))
-
-
-def side_of(cell):
-    return sign(cell)
-
-
-def abs_code(cell):
-    return abs(cell)
-
-
-def is_piece(cell):
-    return cell not in (EMPTY, ROCK, GOAL)
-
-
-def is_octopus(cell):
-    return abs(cell) in {OCTOPUS, OCTO_SELF_FLY, OCTO_SELF_SHARK, OCTO_ENEMY_FLY, OCTO_ENEMY_SHARK}
-
-
-def is_shark(cell):
-    return abs(cell) == SHARK
-
-
-def is_flying(cell):
-    return abs(cell) == FLYING
-
-
-def is_octopus_carrying(cell):
-    return abs(cell) in {OCTO_SELF_FLY, OCTO_SELF_SHARK, OCTO_ENEMY_FLY, OCTO_ENEMY_SHARK}
-
-
-def carried_piece_info(cell):
-    c = abs(cell)
-    if c == OCTO_SELF_FLY:
-        return ("ally", FLYING)
-    if c == OCTO_SELF_SHARK:
-        return ("ally", SHARK)
-    if c == OCTO_ENEMY_FLY:
-        return ("enemy", FLYING)
-    if c == OCTO_ENEMY_SHARK:
-        return ("enemy", SHARK)
-    return None
-
-
-def make_octopus_code(octo_side, carried_side, carried_piece):
-    if octo_side == carried_side:
-        if carried_piece == FLYING:
-            return octo_side * OCTO_SELF_FLY
-        if carried_piece == SHARK:
-            return octo_side * OCTO_SELF_SHARK
-    else:
-        if carried_piece == FLYING:
-            return octo_side * OCTO_ENEMY_FLY
-        if carried_piece == SHARK:
-            return octo_side * OCTO_ENEMY_SHARK
-    raise ValueError("Invalid carried piece for octopus")
-
-
-def octopus_drop_piece(cell):
-    info = carried_piece_info(cell)
-    if info is None:
-        return None
-    carry_side_desc, carry_piece = info
-    octo_side = side_of(cell)
-    carried_side = octo_side if carry_side_desc == "ally" else -octo_side
-    return carried_side * carry_piece
-
-
-def octopus_base_piece(cell):
-    return side_of(cell) * OCTOPUS
-
-
-def winning_display_piece(cell, move_kind=None):
-    if move_kind == "drop_and_win":
-        return octopus_base_piece(cell)
-    return cell
-
-
-def piece_label(cell, lift_mode=False, viewer_side=1):
-    if cell == EMPTY:
-        return ""
-    if cell == ROCK:
-        return "ROCK"
-    if cell == GOAL:
-        return "★"
-
-    s = side_of(cell)
-    sign_txt = "A" if s == 1 else "B"
-    c = abs_code(cell)
-
-    if c == FLYING:
-        return f"{sign_txt}F"
-    if c == SHARK:
-        return f"{sign_txt}S"
-    if c == OCTOPUS:
-        return f"{sign_txt}O"
-
-    info = carried_piece_info(cell)
-    if info is None:
-        return f"{sign_txt}?"
-    carry_side_desc, carry_piece = info
-    carry_short = "F" if carry_piece == FLYING else "S"
-
-    if lift_mode and s == viewer_side:
-        prefix = "a" if carry_side_desc == "ally" else "e"
-        return f"{sign_txt}O({prefix}{carry_short})"
-    return f"{sign_txt}O"
-
-
-def in_team_territory(r, c):
-    return (1 <= r <= 3) and ((1 <= c <= 3) or (8 <= c <= 10))
-
-
-def territory_owner(c):
-    if 1 <= c <= 3:
-        return 1
-    if 8 <= c <= 10:
-        return -1
-    return 0
-
-
-def enemy_goal_col(side):
-    return 11 if side == 1 else 0
-
-
-def in_bounds(r, c):
-    return 0 <= r < ROWS and 0 <= c < COLS
-
-
-def common_move_dirs(side):
-    forward = (0, 1) if side == 1 else (0, -1)
-    up = (-1, 0)
-    down = (1, 0)
-    forward_up = (-1, 1) if side == 1 else (-1, -1)
-    forward_down = (1, 1) if side == 1 else (1, -1)
-    return [forward, up, down, forward_up, forward_down]
-
-
-def add_flying_chain_jumps(board, r, c, side, moves):
-    seen = set()
-    for dr, dc in common_move_dirs(side):
-        cur_r, cur_c = r, c
-        while True:
-            mid_r, mid_c = cur_r + dr, cur_c + dc
-            land_r, land_c = cur_r + 2 * dr, cur_c + 2 * dc
-
-            if not in_bounds(mid_r, mid_c) or not in_bounds(land_r, land_c):
-                break
-
-            middle = board[mid_r][mid_c]
-            landing = board[land_r][land_c]
-
-            if not is_piece(middle):
-                break
-            if landing == ROCK:
-                break
-
-            if landing == GOAL:
-                if land_c == enemy_goal_col(side):
-                    key = ((land_r, land_c), "win_jump")
-                    if key not in seen:
-                        moves.append({"to": (land_r, land_c), "kind": "win_jump"})
-                        seen.add(key)
-                break
-
-            if landing != EMPTY:
-                break
-
-            key = ((land_r, land_c), "jump")
-            if key not in seen:
-                moves.append({"to": (land_r, land_c), "kind": "jump"})
-                seen.add(key)
-
-            cur_r, cur_c = land_r, land_c
-
-
-def get_legal_moves(board, r, c, lift_mode=False):
-    cell = board[r][c]
-    if not is_piece(cell):
-        return []
-
-    side = side_of(cell)
-    abs_piece = abs_code(cell)
-    carrying = is_octopus_carrying(cell)
-    moves = []
-
-    for dr, dc in common_move_dirs(side):
-        nr, nc = r + dr, c + dc
-        if not in_bounds(nr, nc):
-            continue
-
-        dst = board[nr][nc]
-        if dst == ROCK:
-            continue
-
-        if dst == GOAL:
-            if nc == enemy_goal_col(side):
-                if carrying and lift_mode:
-                    moves.append({"to": (nr, nc), "kind": "drop_and_win"})
-                else:
-                    moves.append({"to": (nr, nc), "kind": "win"})
-            continue
-
-        if dst == EMPTY:
-            if carrying and lift_mode:
-                moves.append({"to": (nr, nc), "kind": "drop_move"})
-            else:
-                moves.append({"to": (nr, nc), "kind": "move"})
-            continue
-
-        if side_of(dst) == side:
-            if abs_piece == OCTOPUS and not carrying and abs_code(dst) in (SHARK, FLYING):
-                moves.append({"to": (nr, nc), "kind": "cover"})
-            elif is_octopus(cell) and carrying and abs_code(dst) in (SHARK, FLYING):
-                moves.append({"to": (nr, nc), "kind": "cover_drop"})
-            continue
-
-        if is_shark(cell):
-            moves.append({"to": (nr, nc), "kind": "capture"})
-        elif abs_piece == OCTOPUS and not carrying and abs_code(dst) in (SHARK, FLYING):
-            moves.append({"to": (nr, nc), "kind": "cover"})
-        elif is_octopus(cell) and carrying and abs_code(dst) in (SHARK, FLYING):
-            moves.append({"to": (nr, nc), "kind": "cover_drop"})
-
-    if is_flying(cell):
-        add_flying_chain_jumps(board, r, c, side, moves)
-
-    return moves
-
-
-def apply_move(board, src, move, lift_mode=False):
-    r, c = src
-    nr, nc = move["to"]
-    cell = board[r][c]
-    kind = move["kind"]
-    side = side_of(cell)
-
-    new_board = [row[:] for row in board]
-    winner = None
-
-    if kind in ("win", "win_jump", "drop_and_win"):
-        if kind == "drop_and_win":
-            dropped = octopus_drop_piece(cell)
-            new_board[r][c] = dropped if dropped is not None else EMPTY
-        else:
-            new_board[r][c] = EMPTY
-        winner = side
-        return new_board, winner
-
-    if kind in ("move", "jump"):
-        new_board[nr][nc] = cell
-        new_board[r][c] = EMPTY
-        return new_board, winner
-
-    if kind == "capture":
-        new_board[nr][nc] = cell
-        new_board[r][c] = EMPTY
-        return new_board, winner
-
-    if kind == "cover":
-        dst = new_board[nr][nc]
-        carried_side = side_of(dst)
-        carried_piece = abs_code(dst)
-        new_board[nr][nc] = make_octopus_code(side, carried_side, carried_piece)
-        new_board[r][c] = EMPTY
-        return new_board, winner
-
-    if kind == "cover_drop":
-        dst = new_board[nr][nc]
-        carried_side = side_of(dst)
-        carried_piece = abs_code(dst)
-        dropped = octopus_drop_piece(cell)
-        new_board[r][c] = dropped if dropped is not None else EMPTY
-        new_board[nr][nc] = make_octopus_code(side, carried_side, carried_piece)
-        return new_board, winner
-
-    if kind == "drop_move":
-        dropped = octopus_drop_piece(cell)
-        new_board[r][c] = dropped if dropped is not None else EMPTY
-        new_board[nr][nc] = octopus_base_piece(cell)
-        return new_board, winner
-
-    raise ValueError(f"Unknown move kind: {kind}")
-
-
-def board_to_screen(r, c):
-    x = PADDING + c * CELL
-    y = TOP_UI + PADDING + r * CELL
-    return pygame.Rect(x, y, CELL, CELL)
-
-
-def screen_to_board(pos):
-    x, y = pos
-    bx = x - PADDING
-    by = y - (TOP_UI + PADDING)
-    if bx < 0 or by < 0:
-        return None
-    c = bx // CELL
-    r = by // CELL
-    if 0 <= r < ROWS and 0 <= c < COLS:
-        return int(r), int(c)
-    return None
-
-
-def draw_text_center(surface, text, font, color, rect):
-    img = font.render(text, True, color)
-    img_rect = img.get_rect(center=rect.center)
-    surface.blit(img, img_rect)
-
-
-def draw_button(surface, rect, text, font, active=False):
-    color = BUTTON_ACTIVE if active else BUTTON_COLOR
-    pygame.draw.rect(surface, color, rect, border_radius=10)
-    pygame.draw.rect(surface, BUTTON_BORDER, rect, 2, border_radius=10)
-    draw_text_center(surface, text, font, TEXT_COLOR, rect)
-
-
-def draw_input_box(surface, rect, text, font, active=False):
-    color = INPUT_ACTIVE if active else INPUT_BG
-    pygame.draw.rect(surface, color, rect, border_radius=8)
-    pygame.draw.rect(surface, BUTTON_BORDER, rect, 2, border_radius=8)
-    img = font.render(text, True, TEXT_COLOR)
-    surface.blit(img, (rect.x + 8, rect.y + 7))
-
-
-def move_kind_color(kind):
-    if "win" in kind:
-        return WIN_COLOR
-    if kind == "capture":
-        return CAPTURE_COLOR
-    if kind in ("cover", "cover_drop"):
-        return (180, 120, 220)
-    if kind == "drop_move":
-        return (120, 200, 220)
-    return LEGAL_COLOR
-
-
-def draw_layout_preview(screen, font, a_grid, b_grid):
-    preview_x = WINDOW_W - 250
-    preview_y = 14
-    size = 22
-    gap = 4
-
-    try:
-        a_num_text = str(display_layout_number(a_grid, "A"))
-    except Exception:
-        a_num_text = "-"
-
-    try:
-        b_num_text = str(display_layout_number(b_grid, "B"))
-    except Exception:
-        b_num_text = "-"
-
-    title = font.render("A / B preview", True, TEXT_COLOR)
-    screen.blit(title, (preview_x, preview_y))
-
-    a_label = font.render(f"A #{a_num_text}", True, A_COLOR)
-    b_label = font.render(f"B #{b_num_text}", True, B_COLOR)
-    screen.blit(a_label, (preview_x, preview_y + 24))
-    screen.blit(b_label, (preview_x + 118, preview_y + 24))
-
-    for grid, x0 in [(a_grid, preview_x), (b_grid, preview_x + 118)]:
-        for i in range(3):
-            for j in range(3):
-                rect = pygame.Rect(x0 + j * (size + gap), preview_y + 48 + i * (size + gap), size, size)
-                pygame.draw.rect(screen, (240, 244, 248), rect)
-                pygame.draw.rect(screen, BUTTON_BORDER, rect, 1)
-                draw_text_center(screen, grid[i][j], font, TEXT_COLOR, rect)
-
-
-def draw_board(screen, board, fonts, controls, a_text, b_text, a_grid, b_grid, mirror_b,
-               current_turn=1, lift_mode=False, selected=None, legal_moves=None,
-               winner=None, winning_piece=None, winning_goal=None, error_msg=""):
-    small_font, cell_font, title_font = fonts
-
-    screen.fill(BG_COLOR)
-
-    status = f"Winner: {'A' if winner == 1 else 'B'}" if winner is not None else f"Turn: {'A' if current_turn == 1 else 'B'} | Lift: {'ON' if lift_mode else 'OFF'}"
-    title = f"Aquatika prototype | {status}"
-    screen.blit(title_font.render(title, True, TEXT_COLOR), (PADDING, 18))
-    screen.blit(small_font.render("A/B 입력: 1~1680 또는 SFO/SFO/SFO", True, (70, 80, 95)), (PADDING, 54))
-
-    screen.blit(small_font.render("A", True, A_COLOR), (PADDING, 92))
-    screen.blit(small_font.render("B", True, B_COLOR), (PADDING, 134))
-
-    draw_input_box(screen, controls["input_a"], a_text, small_font, active=(controls["active_input"] == "a"))
-    draw_input_box(screen, controls["input_b"], b_text, small_font, active=(controls["active_input"] == "b"))
-
-    for name, rect in controls["buttons"].items():
-        label = {
-            "random_a": "A랜덤",
-            "random_b": "B랜덤",
-            "mirror_b": "B대칭",
-            "apply": "적용",
-            "lift": "Lift",
-            "reset": "리셋",
-        }[name]
-        active = (name == "lift" and lift_mode) or (name == "mirror_b" and mirror_b)
-        draw_button(screen, rect, label, small_font, active=active)
-
-    if error_msg:
-        screen.blit(small_font.render(error_msg, True, ERROR_COLOR), (PADDING + 448, 134))
-
-    draw_layout_preview(screen, small_font, a_grid, b_grid)
-
-    legal_lookup = {}
-    if legal_moves:
-        for mv in legal_moves:
-            legal_lookup[mv["to"]] = mv["kind"]
-
-    for r in range(ROWS):
-        for c in range(COLS):
-            rect = board_to_screen(r, c)
-            cell = board[r][c]
-
-            if cell == ROCK:
-                face = ROCK_COLOR
-            elif cell == GOAL:
-                face = GOAL_COLOR
-            else:
-                face = WATER_COLOR
-
-            if cell not in (ROCK, GOAL) and in_team_territory(r, c):
-                owner = territory_owner(c)
-                face = A_TERRITORY_COLOR if owner == 1 else B_TERRITORY_COLOR
-
-            pygame.draw.rect(screen, face, rect)
-            pygame.draw.rect(screen, GRID_COLOR, rect, 2)
-
-            if selected == (r, c):
-                pygame.draw.rect(screen, SELECT_COLOR, rect, 4)
-
-            goal_highlight = (r, c) in legal_lookup and cell == GOAL
-            if (r, c) in legal_lookup and cell != GOAL:
-                color = move_kind_color(legal_lookup[(r, c)])
-                inner = rect.inflate(-26, -26)
-                pygame.draw.ellipse(screen, color, inner)
-
-            if cell == GOAL:
-                if winner is not None and winning_goal == (r, c) and winning_piece is not None:
-                    label = piece_label(winning_piece, lift_mode=False, viewer_side=winner)
-                    color = A_COLOR if side_of(winning_piece) == 1 else B_COLOR
-                    draw_text_center(screen, label, cell_font, color, rect)
-                else:
-                    draw_text_center(screen, "★", cell_font, TEXT_COLOR, rect)
-
-                if goal_highlight:
-                    color = move_kind_color(legal_lookup[(r, c)])
-                    glow = rect.inflate(-8, -8)
-                    pygame.draw.rect(screen, color, glow, 6, border_radius=12)
-            elif cell == ROCK:
-                draw_text_center(screen, "#", cell_font, (230, 230, 230), rect)
-            elif cell != EMPTY:
-                label = piece_label(cell, lift_mode=lift_mode, viewer_side=current_turn)
-                color = A_COLOR if side_of(cell) == 1 else B_COLOR
-                draw_text_center(screen, label, cell_font, color, rect)
-
-    for c in range(COLS):
-        rect = board_to_screen(0, c)
-        img = small_font.render(str(c), True, TEXT_COLOR)
-        pos = img.get_rect(center=(rect.centerx, TOP_UI + 10))
-        screen.blit(img, pos)
-
-    for r in range(ROWS):
-        rect = board_to_screen(r, 0)
-        img = small_font.render(str(r), True, TEXT_COLOR)
-        pos = img.get_rect(center=(12, rect.centery))
-        screen.blit(img, pos)
-
-
-def create_controls():
-    input_a = pygame.Rect(PADDING + 24, 86, 240, 34)
-    input_b = pygame.Rect(PADDING + 24, 128, 240, 34)
-    buttons = {
-        "random_a": pygame.Rect(PADDING + 276, 86, 72, 34),
-        "random_b": pygame.Rect(PADDING + 276, 128, 72, 34),
-        "mirror_b": pygame.Rect(PADDING + 358, 128, 78, 34),
-        "apply": pygame.Rect(PADDING + 358, 86, 84, 34),
-        "lift": pygame.Rect(PADDING + 452, 86, 58, 34),
-        "reset": pygame.Rect(PADDING + 520, 86, 66, 34),
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aquatika Prototype (HTML/JS)</title>
+  <style>
+    body {
+      margin: 0;
+      background: #e9edf3;
+      font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      padding: 18px;
+      color: #1b2430;
     }
-    return {
-        "input_a": input_a,
-        "input_b": input_b,
-        "buttons": buttons,
-        "active_input": None,
+    .wrap {
+      background: #f7f9fc;
+      border: 1px solid #cfd7e3;
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      padding: 14px;
+    }
+    canvas {
+      display: block;
+      background: #f5f8fc;
+      border-radius: 12px;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <canvas id="game"></canvas>
+  </div>
+
+  <script>
+    // =========================
+    // Constants
+    // =========================
+    const EMPTY = 0;
+    const ROCK = 10;
+    const GOAL = 20;
+
+    const FLYING = 1;
+    const SHARK = 2;
+    const OCTOPUS = 5;
+
+    const OCTO_SELF_FLY = 11;
+    const OCTO_SELF_SHARK = 12;
+    const OCTO_ENEMY_FLY = 13;
+    const OCTO_ENEMY_SHARK = 14;
+
+    const ROWS = 5;
+    const COLS = 12;
+    const NUM_LAYOUTS = 1680;
+
+    const BG_COLOR = [245, 248, 252];
+    const GRID_COLOR = [25, 35, 45];
+    const WATER_COLOR = [217, 242, 255];
+    const ROCK_COLOR = [100, 100, 100];
+    const GOAL_COLOR = [255, 217, 102];
+    const TEXT_COLOR = [20, 25, 35];
+    const A_COLOR = [30, 90, 180];
+    const B_COLOR = [180, 60, 60];
+    const A_TERRITORY_COLOR = [170, 205, 234];
+    const B_TERRITORY_COLOR = [236, 188, 188];
+    const SELECT_COLOR = [255, 180, 0];
+    const LEGAL_COLOR = [90, 200, 120];
+    const CAPTURE_COLOR = [220, 120, 120];
+    const WIN_COLOR = [90, 90, 255];
+    const BUTTON_COLOR = [232, 236, 242];
+    const BUTTON_ACTIVE = [200, 225, 255];
+    const BUTTON_BORDER = [80, 90, 110];
+    const INPUT_BG = [255, 255, 255];
+    const INPUT_ACTIVE = [255, 248, 210];
+    const ERROR_COLOR = [180, 50, 50];
+    const COVER_COLOR = [180, 120, 220];
+    const DROP_COLOR = [120, 200, 220];
+
+    const CELL = 72;
+    const PADDING = 24;
+    const TOP_UI = 210;
+
+    const WINDOW_W = COLS * CELL + PADDING * 2;
+    const WINDOW_H = ROWS * CELL + PADDING * 2 + TOP_UI;
+
+    // =========================
+    // Canvas setup
+    // =========================
+    const canvas = document.getElementById("game");
+    canvas.width = WINDOW_W;
+    canvas.height = WINDOW_H;
+    const ctx = canvas.getContext("2d");
+
+    function rgb(c) {
+      return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
     }
 
-
-def reset_game(a_grid, b_grid):
-    return {
-        "board": make_initial_board(a_grid, b_grid),
-        "current_turn": 1,
-        "lift_mode": False,
-        "selected": None,
-        "legal_moves": [],
-        "winner": None,
-        "winning_piece": None,
-        "winning_goal": None,
+    function sign(x) {
+      if (x > 0) return 1;
+      if (x < 0) return -1;
+      return 0;
     }
 
+    function clamp(x, lo = 0, hi = 255) {
+      return Math.max(lo, Math.min(hi, Math.floor(x)));
+    }
 
-def resolve_input_pair(a_text, b_text, mirror_b):
-    a_grid = parse_layout_spec(a_text)
-    if mirror_b:
-        b_grid = mirror_lr(a_grid)
-    else:
-        b_grid = parse_layout_spec(b_text)
-    return a_grid, b_grid
+    function lighten(color, amount = 28) {
+      return [clamp(color[0] + amount), clamp(color[1] + amount), clamp(color[2] + amount)];
+    }
 
+    function darken(color, amount = 28) {
+      return [clamp(color[0] - amount), clamp(color[1] - amount), clamp(color[2] - amount)];
+    }
 
-def main():
-    pygame.init()
-    screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
-    pygame.display.set_caption("Aquatika Pygame Prototype")
-    clock = pygame.time.Clock()
+    function teamColors(side) {
+      const base = side === 1 ? A_COLOR : B_COLOR;
+      const edge = darken(base, 45);
+      const glow = lighten(base, 55);
+      return [base, edge, glow];
+    }
 
-    small_font = pygame.font.SysFont("malgungothic", 20)
-    cell_font = pygame.font.SysFont("malgungothic", 24, bold=True)
-    title_font = pygame.font.SysFont("malgungothic", 24, bold=True)
+    // =========================
+    // Combinatorics / layout
+    // =========================
+    function factorial(n) {
+      let r = 1;
+      for (let i = 2; i <= n; i++) r *= i;
+      return r;
+    }
 
-    controls = create_controls()
-    a_text = "1"
-    b_text = "1"
-    mirror_b = True
-    error_msg = ""
+    function multinomialCount(counts) {
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      let result = factorial(total);
+      for (const v of Object.values(counts)) {
+        result /= factorial(v);
+      }
+      return result;
+    }
 
-    a_grid, b_grid = resolve_input_pair(a_text, b_text, mirror_b)
-    state = reset_game(a_grid, b_grid)
+    function unrank3x3Layout(rank) {
+      if (!(0 <= rank && rank < NUM_LAYOUTS)) {
+        throw new Error(`rank must be in 0..${NUM_LAYOUTS - 1}`);
+      }
 
-    running = True
-    while running:
-        clock.tick(FPS)
+      const counts = { S: 3, O: 3, F: 3 };
+      const symbols = ["S", "O", "F"];
+      const result = [];
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
+      for (let i = 0; i < 9; i++) {
+        for (const sym of symbols) {
+          if (counts[sym] === 0) continue;
+          counts[sym] -= 1;
+          const cnt = multinomialCount(counts);
+          if (rank < cnt) {
+            result.push(sym);
+            break;
+          }
+          rank -= cnt;
+          counts[sym] += 1;
+        }
+      }
+      return result;
+    }
 
-            elif event.type == pygame.KEYDOWN:
-                if controls["active_input"] is not None:
-                    key = "a" if controls["active_input"] == "a" else "b"
-                    current = a_text if key == "a" else b_text
-                    if event.key == pygame.K_BACKSPACE:
-                        current = current[:-1]
-                    elif event.key == pygame.K_RETURN:
-                        try:
-                            a_grid, b_grid = resolve_input_pair(a_text, b_text, mirror_b)
-                            state = reset_game(a_grid, b_grid)
-                            error_msg = ""
-                        except ValueError as e:
-                            error_msg = str(e)
-                    else:
-                        ch = event.unicode
-                        if ch and ch.isprintable():
-                            current += ch
-                    if key == "a":
-                        a_text = current
-                        if mirror_b:
-                            try:
-                                a_grid = parse_layout_spec(a_text)
-                                b_grid = mirror_lr(a_grid)
-                                b_text = str(display_layout_number(b_grid, "B"))
-                                error_msg = ""
-                            except Exception:
-                                pass
-                    else:
-                        b_text = current
-                else:
-                    if event.key == pygame.K_r:
-                        state = reset_game(a_grid, b_grid)
-                    elif state["winner"] is None and event.key == pygame.K_l:
-                        state["lift_mode"] = not state["lift_mode"]
+    function toGrid(layout) {
+      return [layout.slice(0, 3), layout.slice(3, 6), layout.slice(6, 9)];
+    }
 
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                pos = event.pos
+    function mirrorLR(grid) {
+      return grid.map(row => [...row].reverse());
+    }
 
-                if controls["input_a"].collidepoint(pos):
-                    controls["active_input"] = "a"
-                    continue
-                if controls["input_b"].collidepoint(pos):
-                    controls["active_input"] = "b"
-                    continue
-                controls["active_input"] = None
+    function layoutFromUiNumber(number) {
+      if (!(1 <= number && number <= NUM_LAYOUTS)) {
+        throw new Error(`number must be in 1..${NUM_LAYOUTS}`);
+      }
+      return toGrid(unrank3x3Layout(number - 1));
+    }
 
-                clicked_button = None
-                for name, rect in controls["buttons"].items():
-                    if rect.collidepoint(pos):
-                        clicked_button = name
-                        break
+    function normalizeLayoutText(text) {
+      return text.trim().toUpperCase().replaceAll(" ", "");
+    }
 
-                if clicked_button is not None:
-                    try:
-                        if clicked_button == "random_a":
-                            a_grid = random_grid()
-                            a_text = str(display_layout_number(a_grid, "A"))
-                            if mirror_b:
-                                b_grid = mirror_lr(a_grid)
-                                b_text = str(display_layout_number(b_grid, "B"))
-                        elif clicked_button == "random_b":
-                            if mirror_b:
-                                mirror_b = False
-                            b_grid = random_grid()
-                            b_text = str(display_layout_number(b_grid, "B"))
-                        elif clicked_button == "mirror_b":
-                            mirror_b = not mirror_b
-                            if mirror_b:
-                                a_grid = parse_layout_spec(a_text)
-                                b_grid = mirror_lr(a_grid)
-                                b_text = str(display_layout_number(b_grid, "B"))
-                        elif clicked_button == "apply":
-                            a_grid, b_grid = resolve_input_pair(a_text, b_text, mirror_b)
-                            state = reset_game(a_grid, b_grid)
-                        elif clicked_button == "lift" and state["winner"] is None:
-                            state["lift_mode"] = not state["lift_mode"]
-                        elif clicked_button == "reset":
-                            state = reset_game(a_grid, b_grid)
-                        error_msg = ""
-                    except ValueError as e:
-                        error_msg = str(e)
-                    continue
+    function parseLayoutSpec(spec) {
+      const s = normalizeLayoutText(spec);
+      if (!s) throw new Error("빈 입력입니다.");
 
-                if state["winner"] is not None:
-                    continue
+      if (/^\d+$/.test(s)) {
+        return layoutFromUiNumber(Number(s));
+      }
 
-                pos_rc = screen_to_board(pos)
-                if pos_rc is None:
-                    continue
-                r, c = pos_rc
-                cell = state["board"][r][c]
+      const parts = s.split("/");
+      if (parts.length === 3 && parts.every(p => p.length === 3)) {
+        const chars = parts.flatMap(row => row.split(""));
+        if (chars.some(ch => !["S", "F", "O"].includes(ch))) {
+          throw new Error("S, F, O만 사용할 수 있습니다.");
+        }
+        if (
+          chars.filter(ch => ch === "S").length !== 3 ||
+          chars.filter(ch => ch === "F").length !== 3 ||
+          chars.filter(ch => ch === "O").length !== 3
+        ) {
+          throw new Error("S, F, O는 각각 3개씩이어야 합니다.");
+        }
+        return parts.map(row => row.split(""));
+      }
 
-                if state["selected"] is None:
-                    if is_piece(cell) and side_of(cell) == state["current_turn"]:
-                        state["selected"] = (r, c)
-                        state["legal_moves"] = get_legal_moves(state["board"], r, c, lift_mode=state["lift_mode"])
-                else:
-                    chosen = None
-                    for mv in state["legal_moves"]:
-                        if mv["to"] == (r, c):
-                            chosen = mv
-                            break
+      throw new Error("번호(1~1680) 또는 SFO/SFO/SFO 형식으로 입력하세요.");
+    }
 
-                    if chosen is not None:
-                        src_r, src_c = state["selected"]
-                        moving_cell = state["board"][src_r][src_c]
-                        state["board"], state["winner"] = apply_move(
-                            state["board"], state["selected"], chosen, lift_mode=state["lift_mode"]
-                        )
-                        if state["winner"] is not None:
-                            state["winning_piece"] = winning_display_piece(moving_cell, chosen["kind"])
-                            state["winning_goal"] = chosen["to"]
-                        state["selected"] = None
-                        state["legal_moves"] = []
-                        state["lift_mode"] = False
-                        if state["winner"] is None:
-                            state["current_turn"] *= -1
-                    else:
-                        if is_piece(cell) and side_of(cell) == state["current_turn"]:
-                            state["selected"] = (r, c)
-                            state["legal_moves"] = get_legal_moves(state["board"], r, c, lift_mode=state["lift_mode"])
-                        else:
-                            state["selected"] = None
-                            state["legal_moves"] = []
+    function gridToText(grid) {
+      return grid.map(row => row.join("")).join("/");
+    }
 
-        draw_board(
-            screen,
-            state["board"],
-            fonts=(small_font, cell_font, title_font),
-            controls=controls,
-            a_text=a_text,
-            b_text=b_text,
-            a_grid=a_grid,
-            b_grid=b_grid,
-            mirror_b=mirror_b,
-            current_turn=state["current_turn"],
-            lift_mode=state["lift_mode"],
-            selected=state["selected"],
-            legal_moves=state["legal_moves"],
-            winner=state["winner"],
-            winning_piece=state["winning_piece"],
-            winning_goal=state["winning_goal"],
-            error_msg=error_msg,
-        )
-        pygame.display.flip()
+    function findLayoutNumberFromGrid(grid) {
+      const target = grid.flat();
+      const counts = { S: 3, O: 3, F: 3 };
+      const symbols = ["S", "O", "F"];
+      let rank = 0;
 
-    pygame.quit()
+      for (const ch of target) {
+        for (const sym of symbols) {
+          if (counts[sym] === 0) continue;
+          if (sym === ch) {
+            counts[sym] -= 1;
+            break;
+          }
+          counts[sym] -= 1;
+          rank += multinomialCount(counts);
+          counts[sym] += 1;
+        }
+      }
+      return rank + 1;
+    }
 
+    function displayLayoutNumber(grid, side) {
+      const canonical = side === "B" ? mirrorLR(grid) : grid;
+      return findLayoutNumberFromGrid(canonical);
+    }
 
-if __name__ == "__main__":
-    main()
+    function randomGrid() {
+      return layoutFromUiNumber(1 + Math.floor(Math.random() * NUM_LAYOUTS));
+    }
+
+    // =========================
+    // Board / pieces
+    // =========================
+    function applyTwoLayouts(board, aGrid, bGrid) {
+      const pieceMapA = { S: SHARK, O: OCTOPUS, F: FLYING };
+      const pieceMapB = { S: -SHARK, O: -OCTOPUS, F: -FLYING };
+
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          board[1 + i][1 + j] = pieceMapA[aGrid[i][j]];
+          board[1 + i][8 + j] = pieceMapB[bGrid[i][j]];
+        }
+      }
+    }
+
+    function makeInitialBoard(aGrid, bGrid) {
+      const board = Array.from({ length: ROWS }, () => Array(COLS).fill(EMPTY));
+
+      for (let r = 0; r < ROWS; r++) {
+        if (r !== 2) {
+          board[r][0] = ROCK;
+          board[r][11] = ROCK;
+        }
+      }
+
+      board[2][0] = GOAL;
+      board[2][11] = GOAL;
+      applyTwoLayouts(board, aGrid, bGrid);
+      return board;
+    }
+
+    function sideOf(cell) {
+      return sign(cell);
+    }
+
+    function absCode(cell) {
+      return Math.abs(cell);
+    }
+
+    function isPiece(cell) {
+      return cell !== EMPTY && cell !== ROCK && cell !== GOAL;
+    }
+
+    function isOctopus(cell) {
+      return [OCTOPUS, OCTO_SELF_FLY, OCTO_SELF_SHARK, OCTO_ENEMY_FLY, OCTO_ENEMY_SHARK].includes(Math.abs(cell));
+    }
+
+    function isShark(cell) {
+      return Math.abs(cell) === SHARK;
+    }
+
+    function isFlying(cell) {
+      return Math.abs(cell) === FLYING;
+    }
+
+    function isOctopusCarrying(cell) {
+      return [OCTO_SELF_FLY, OCTO_SELF_SHARK, OCTO_ENEMY_FLY, OCTO_ENEMY_SHARK].includes(Math.abs(cell));
+    }
+
+    function carriedPieceInfo(cell) {
+      const c = Math.abs(cell);
+      if (c === OCTO_SELF_FLY) return ["ally", FLYING];
+      if (c === OCTO_SELF_SHARK) return ["ally", SHARK];
+      if (c === OCTO_ENEMY_FLY) return ["enemy", FLYING];
+      if (c === OCTO_ENEMY_SHARK) return ["enemy", SHARK];
+      return null;
+    }
+
+    function makeOctopusCode(octoSide, carriedSide, carriedPiece) {
+      if (octoSide === carriedSide) {
+        if (carriedPiece === FLYING) return octoSide * OCTO_SELF_FLY;
+        if (carriedPiece === SHARK) return octoSide * OCTO_SELF_SHARK;
+      } else {
+        if (carriedPiece === FLYING) return octoSide * OCTO_ENEMY_FLY;
+        if (carriedPiece === SHARK) return octoSide * OCTO_ENEMY_SHARK;
+      }
+      throw new Error("Invalid carried piece for octopus");
+    }
+
+    function octopusDropPiece(cell) {
+      const info = carriedPieceInfo(cell);
+      if (!info) return null;
+      const [carrySideDesc, carryPiece] = info;
+      const octoSide = sideOf(cell);
+      const carriedSide = carrySideDesc === "ally" ? octoSide : -octoSide;
+      return carriedSide * carryPiece;
+    }
+
+    function octopusBasePiece(cell) {
+      return sideOf(cell) * OCTOPUS;
+    }
+
+    function winningDisplayPiece(cell, moveKind = null) {
+      if (moveKind === "drop_and_win") return octopusBasePiece(cell);
+      return cell;
+    }
+
+    function inTeamTerritory(r, c) {
+      return (1 <= r && r <= 3) && ((1 <= c && c <= 3) || (8 <= c && c <= 10));
+    }
+
+    function territoryOwner(c) {
+      if (1 <= c && c <= 3) return 1;
+      if (8 <= c && c <= 10) return -1;
+      return 0;
+    }
+
+    function enemyGoalCol(side) {
+      return side === 1 ? 11 : 0;
+    }
+
+    function inBounds(r, c) {
+      return 0 <= r && r < ROWS && 0 <= c && c < COLS;
+    }
+
+    function commonMoveDirs(side) {
+      const forward = side === 1 ? [0, 1] : [0, -1];
+      const up = [-1, 0];
+      const down = [1, 0];
+      const forwardUp = side === 1 ? [-1, 1] : [-1, -1];
+      const forwardDown = side === 1 ? [1, 1] : [1, -1];
+      return [forward, up, down, forwardUp, forwardDown];
+    }
+
+    function addFlyingChainJumps(board, r, c, side, moves) {
+      const seen = new Set();
+
+      for (const [dr, dc] of commonMoveDirs(side)) {
+        let curR = r;
+        let curC = c;
+
+        while (true) {
+          const midR = curR + dr;
+          const midC = curC + dc;
+          const landR = curR + 2 * dr;
+          const landC = curC + 2 * dc;
+
+          if (!inBounds(midR, midC) || !inBounds(landR, landC)) break;
+
+          const middle = board[midR][midC];
+          const landing = board[landR][landC];
+
+          if (!isPiece(middle)) break;
+          if (landing === ROCK) break;
+
+          if (landing === GOAL) {
+            if (landC === enemyGoalCol(side)) {
+              const key = `${landR},${landC}|win_jump`;
+              if (!seen.has(key)) {
+                moves.push({ to: [landR, landC], kind: "win_jump" });
+                seen.add(key);
+              }
+            }
+            break;
+          }
+
+          if (landing !== EMPTY) break;
+
+          const key = `${landR},${landC}|jump`;
+          if (!seen.has(key)) {
+            moves.push({ to: [landR, landC], kind: "jump" });
+            seen.add(key);
+          }
+
+          curR = landR;
+          curC = landC;
+        }
+      }
+    }
+
+    function getLegalMoves(board, r, c, liftMode = false) {
+      const cell = board[r][c];
+      if (!isPiece(cell)) return [];
+
+      const side = sideOf(cell);
+      const absPiece = absCode(cell);
+      const carrying = isOctopusCarrying(cell);
+      const moves = [];
+
+      for (const [dr, dc] of commonMoveDirs(side)) {
+        const nr = r + dr;
+        const nc = c + dc;
+        if (!inBounds(nr, nc)) continue;
+
+        const dst = board[nr][nc];
+        if (dst === ROCK) continue;
+
+        if (dst === GOAL) {
+          if (nc === enemyGoalCol(side)) {
+            if (carrying && liftMode) {
+              moves.push({ to: [nr, nc], kind: "drop_and_win" });
+            } else {
+              moves.push({ to: [nr, nc], kind: "win" });
+            }
+          }
+          continue;
+        }
+
+        if (dst === EMPTY) {
+          if (carrying && liftMode) {
+            moves.push({ to: [nr, nc], kind: "drop_move" });
+          } else {
+            moves.push({ to: [nr, nc], kind: "move" });
+          }
+          continue;
+        }
+
+        if (sideOf(dst) === side) {
+          if (absPiece === OCTOPUS && !carrying && [SHARK, FLYING].includes(absCode(dst))) {
+            moves.push({ to: [nr, nc], kind: "cover" });
+          } else if (isOctopus(cell) && carrying && [SHARK, FLYING].includes(absCode(dst))) {
+            moves.push({ to: [nr, nc], kind: "cover_drop" });
+          }
+          continue;
+        }
+
+        if (isShark(cell)) {
+          moves.push({ to: [nr, nc], kind: "capture" });
+        } else if (absPiece === OCTOPUS && !carrying && [SHARK, FLYING].includes(absCode(dst))) {
+          moves.push({ to: [nr, nc], kind: "cover" });
+        } else if (isOctopus(cell) && carrying && [SHARK, FLYING].includes(absCode(dst))) {
+          moves.push({ to: [nr, nc], kind: "cover_drop" });
+        }
+      }
+
+      if (isFlying(cell)) {
+        addFlyingChainJumps(board, r, c, side, moves);
+      }
+
+      return moves;
+    }
+
+    function cloneBoard(board) {
+      return board.map(row => [...row]);
+    }
+
+    function applyMove(board, src, move, liftMode = false) {
+      const [r, c] = src;
+      const [nr, nc] = move.to;
+      const cell = board[r][c];
+      const kind = move.kind;
+      const side = sideOf(cell);
+
+      const newBoard = cloneBoard(board);
+      let winner = null;
+
+      if (["win", "win_jump", "drop_and_win"].includes(kind)) {
+        if (kind === "drop_and_win") {
+          const dropped = octopusDropPiece(cell);
+          newBoard[r][c] = dropped !== null ? dropped : EMPTY;
+        } else {
+          newBoard[r][c] = EMPTY;
+        }
+        winner = side;
+        return [newBoard, winner];
+      }
+
+      if (kind === "move" || kind === "jump") {
+        newBoard[nr][nc] = cell;
+        newBoard[r][c] = EMPTY;
+        return [newBoard, winner];
+      }
+
+      if (kind === "capture") {
+        newBoard[nr][nc] = cell;
+        newBoard[r][c] = EMPTY;
+        return [newBoard, winner];
+      }
+
+      if (kind === "cover") {
+        const dst = newBoard[nr][nc];
+        const carriedSide = sideOf(dst);
+        const carriedPiece = absCode(dst);
+        newBoard[nr][nc] = makeOctopusCode(side, carriedSide, carriedPiece);
+        newBoard[r][c] = EMPTY;
+        return [newBoard, winner];
+      }
+
+      if (kind === "cover_drop") {
+        const dst = newBoard[nr][nc];
+        const carriedSide = sideOf(dst);
+        const carriedPiece = absCode(dst);
+        const dropped = octopusDropPiece(cell);
+        newBoard[r][c] = dropped !== null ? dropped : EMPTY;
+        newBoard[nr][nc] = makeOctopusCode(side, carriedSide, carriedPiece);
+        return [newBoard, winner];
+      }
+
+      if (kind === "drop_move") {
+        const dropped = octopusDropPiece(cell);
+        newBoard[r][c] = dropped !== null ? dropped : EMPTY;
+        newBoard[nr][nc] = octopusBasePiece(cell);
+        return [newBoard, winner];
+      }
+
+      throw new Error(`Unknown move kind: ${kind}`);
+    }
+
+    // =========================
+    // Geometry / UI helpers
+    // =========================
+    function boardToScreen(r, c) {
+      const x = PADDING + c * CELL;
+      const y = TOP_UI + PADDING + r * CELL;
+      return { x, y, w: CELL, h: CELL };
+    }
+
+    function pointInRect(px, py, rect) {
+      return px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h;
+    }
+
+    function screenToBoard(x, y) {
+      const bx = x - PADDING;
+      const by = y - (TOP_UI + PADDING);
+      if (bx < 0 || by < 0) return null;
+      const c = Math.floor(bx / CELL);
+      const r = Math.floor(by / CELL);
+      if (0 <= r && r < ROWS && 0 <= c && c < COLS) return [r, c];
+      return null;
+    }
+
+    function roundRect(ctx, x, y, w, h, r) {
+      const rr = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr);
+      ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+    }
+
+    function fillRoundRect(ctx, x, y, w, h, r, color) {
+      roundRect(ctx, x, y, w, h, r);
+      ctx.fillStyle = rgb(color);
+      ctx.fill();
+    }
+
+    function strokeRoundRect(ctx, x, y, w, h, r, color, width = 1) {
+      roundRect(ctx, x, y, w, h, r);
+      ctx.strokeStyle = rgb(color);
+      ctx.lineWidth = width;
+      ctx.stroke();
+    }
+
+    function drawText(text, x, y, opts = {}) {
+      const {
+        color = TEXT_COLOR,
+        size = 20,
+        bold = false,
+        align = "left",
+        baseline = "alphabetic"
+      } = opts;
+      ctx.font = `${bold ? "700" : "400"} ${size}px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif`;
+      ctx.fillStyle = rgb(color);
+      ctx.textAlign = align;
+      ctx.textBaseline = baseline;
+      ctx.fillText(text, x, y);
+    }
+
+    function drawTextCenter(text, rect, opts = {}) {
+      drawText(text, rect.x + rect.w / 2, rect.y + rect.h / 2, {
+        ...opts,
+        align: "center",
+        baseline: "middle"
+      });
+    }
+
+    function drawButton(rect, text, active = false) {
+      const color = active ? BUTTON_ACTIVE : BUTTON_COLOR;
+      fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 10, color);
+      strokeRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 10, BUTTON_BORDER, 2);
+      drawTextCenter(text, rect, { color: TEXT_COLOR, size: 18 });
+    }
+
+    function drawInputBox(rect, text, active = false) {
+      const color = active ? INPUT_ACTIVE : INPUT_BG;
+      fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 8, color);
+      strokeRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 8, BUTTON_BORDER, 2);
+      drawText(text, rect.x + 8, rect.y + rect.h / 2, {
+        size: 18,
+        color: TEXT_COLOR,
+        baseline: "middle"
+      });
+    }
+
+    function moveKindColor(kind) {
+      if (kind.includes("win")) return WIN_COLOR;
+      if (kind === "capture") return CAPTURE_COLOR;
+      if (kind === "cover" || kind === "cover_drop") return COVER_COLOR;
+      if (kind === "drop_move") return DROP_COLOR;
+      return LEGAL_COLOR;
+    }
+
+    // =========================
+    // Piece drawing
+    // =========================
+    function drawPieceShadow(rect) {
+      ctx.save();
+      ctx.fillStyle = "rgba(205, 212, 220, 0.9)";
+      ctx.beginPath();
+      ctx.ellipse(
+        rect.x + rect.w / 2 + 3,
+        rect.y + rect.h / 2 + 5,
+        (rect.w - 18) / 2,
+        (rect.h - 26) / 2,
+        0,
+        0,
+        Math.PI * 2
+      );
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawFlyingIcon(rect, base, edge, glow) {
+      const cx = rect.x + rect.w / 2;
+      const cy = rect.y + rect.h / 2;
+      const w = rect.w;
+      const h = rect.h;
+
+      const leftWing = [
+        [cx - w * 0.04, cy - h * 0.02],
+        [cx - w * 0.36, cy - h * 0.20],
+        [cx - w * 0.22, cy + h * 0.04],
+      ];
+      const rightWing = [
+        [cx + w * 0.04, cy - h * 0.02],
+        [cx + w * 0.36, cy - h * 0.20],
+        [cx + w * 0.22, cy + h * 0.04],
+      ];
+      const body = [
+        [cx, cy - h * 0.27],
+        [cx + w * 0.18, cy],
+        [cx, cy + h * 0.27],
+        [cx - w * 0.18, cy],
+      ];
+
+      function poly(points, fill, stroke, lw = 2) {
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+        ctx.closePath();
+        ctx.fillStyle = rgb(fill);
+        ctx.fill();
+        ctx.strokeStyle = rgb(stroke);
+        ctx.lineWidth = lw;
+        ctx.stroke();
+      }
+
+      poly(leftWing, glow, edge);
+      poly(rightWing, glow, edge);
+      poly(body, base, edge);
+
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(cx, cy - h * 0.05, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawSharkIcon(rect, base, edge, glow, side) {
+      const cx = rect.x + rect.w / 2;
+      const cy = rect.y + rect.h / 2;
+      const w = rect.w;
+      const h = rect.h;
+      const facing = side === 1 ? 1 : -1;
+
+      const body = [
+        [cx - facing * w * 0.24, cy - h * 0.14],
+        [cx + facing * w * 0.16, cy - h * 0.14],
+        [cx + facing * w * 0.30, cy],
+        [cx + facing * w * 0.16, cy + h * 0.14],
+        [cx - facing * w * 0.24, cy + h * 0.14],
+        [cx - facing * w * 0.34, cy],
+      ];
+      const fin = [
+        [cx - facing * w * 0.01, cy - h * 0.14],
+        [cx + facing * w * 0.07, cy - h * 0.34],
+        [cx + facing * w * 0.13, cy - h * 0.12],
+      ];
+      const tail = [
+        [cx - facing * w * 0.28, cy],
+        [cx - facing * w * 0.42, cy - h * 0.16],
+        [cx - facing * w * 0.40, cy],
+        [cx - facing * w * 0.42, cy + h * 0.16],
+      ];
+
+      function poly(points, fill, stroke, lw = 2) {
+        ctx.beginPath();
+        ctx.moveTo(points[0][0], points[0][1]);
+        for (let i = 1; i < points.length; i++) ctx.lineTo(points[i][0], points[i][1]);
+        ctx.closePath();
+        ctx.fillStyle = rgb(fill);
+        ctx.fill();
+        ctx.strokeStyle = rgb(stroke);
+        ctx.lineWidth = lw;
+        ctx.stroke();
+      }
+
+      poly(body, base, edge);
+      poly(fin, glow, edge);
+      poly(tail, glow, edge);
+
+      const eyeX = cx + facing * w * 0.18;
+      const eyeY = cy - h * 0.04;
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(eyeX, eyeY, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = rgb(edge);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(eyeX, eyeY, 1, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    function drawOctopusIcon(rect, base, edge, glow) {
+      const cx = rect.x + rect.w / 2;
+      const cy = rect.y + rect.h / 2;
+      const w = rect.w;
+      const h = rect.h;
+
+      const headCx = cx;
+      const headCy = cy - h * 0.08;
+      const headR = Math.floor(Math.min(w, h) * 0.20);
+
+      ctx.fillStyle = rgb(base);
+      ctx.beginPath();
+      ctx.arc(headCx, headCy, headR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = rgb(edge);
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      const tentacleOffsets = [-0.20, -0.12, -0.04, 0.04, 0.12, 0.20];
+      for (const dx of tentacleOffsets) {
+        const x0 = cx + w * dx;
+        const y0 = cy + h * 0.02;
+        const x1 = cx + w * dx * 1.08;
+        const y1 = cy + h * 0.24;
+
+        ctx.strokeStyle = rgb(glow);
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+
+        ctx.strokeStyle = rgb(edge);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
+      }
+
+      const eyes = [
+        [cx - w * 0.07, cy - h * 0.11],
+        [cx + w * 0.07, cy - h * 0.11]
+      ];
+      for (const [ex, ey] of eyes) {
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(ex, ey, 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = rgb(edge);
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(ex, ey, 1, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    function drawCarryBadge(rect, cell, liftMode, viewerSide) {
+      const info = carriedPieceInfo(cell);
+      if (!info) return;
+      if (!liftMode) return;
+      if (sideOf(cell) !== viewerSide) return;
+
+      const [carrySideDesc, carryPiece] = info;
+      const octoSide = sideOf(cell);
+      const carriedSide = carrySideDesc === "ally" ? octoSide : -octoSide;
+      const badgeText = carryPiece === FLYING ? "F" : "S";
+
+      const bx = rect.x + rect.w - 14;
+      const by = rect.y + 14;
+      const badgeR = 12;
+
+      const [fill] = teamColors(carriedSide);
+      const bg = lighten(fill, 70);
+      const border = darken(fill, 55);
+      const textColor = darken(fill, 80);
+
+      ctx.fillStyle = rgb(bg);
+      ctx.beginPath();
+      ctx.arc(bx, by, badgeR, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = rgb(border);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(bx, by, badgeR, 0, Math.PI * 2);
+      ctx.stroke();
+
+      drawText(badgeText, bx, by, {
+        size: 16,
+        bold: true,
+        color: textColor,
+        align: "center",
+        baseline: "middle"
+      });
+    }
+
+    function drawPiece(rect, cell, liftMode = false, viewerSide = 1) {
+      if (!isPiece(cell)) return;
+
+      const side = sideOf(cell);
+      const [base, edge, glow] = teamColors(side);
+
+      const pieceRect = {
+        x: rect.x + 7,
+        y: rect.y + 7,
+        w: rect.w - 14,
+        h: rect.h - 14
+      };
+
+      drawPieceShadow(pieceRect);
+
+      const ringRect = {
+        x: pieceRect.x + 7,
+        y: pieceRect.y - 9,
+        w: pieceRect.w - 14,
+        h: pieceRect.h + 18
+      };
+
+      ctx.fillStyle = rgb(lighten(base, 90));
+      ctx.beginPath();
+      ctx.ellipse(
+        ringRect.x + ringRect.w / 2,
+        ringRect.y + ringRect.h / 2,
+        ringRect.w / 2,
+        ringRect.h / 2,
+        0, 0, Math.PI * 2
+      );
+      ctx.fill();
+
+      ctx.strokeStyle = rgb(edge);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(
+        ringRect.x + ringRect.w / 2,
+        ringRect.y + ringRect.h / 2,
+        ringRect.w / 2,
+        ringRect.h / 2,
+        0, 0, Math.PI * 2
+      );
+      ctx.stroke();
+
+      const c = absCode(cell);
+      const baseKind = isOctopus(cell) ? OCTOPUS : c;
+
+      if (baseKind === FLYING) {
+        drawFlyingIcon(pieceRect, base, edge, glow);
+      } else if (baseKind === SHARK) {
+        drawSharkIcon(pieceRect, base, edge, glow, side);
+      } else if (baseKind === OCTOPUS) {
+        drawOctopusIcon(pieceRect, base, edge, glow);
+      }
+
+      if (isOctopusCarrying(cell) && liftMode && side === viewerSide) {
+        drawCarryBadge(rect, cell, liftMode, viewerSide);
+      }
+    }
+
+    function drawMoveMarker(rect, kind) {
+      const color = moveKindColor(kind);
+      const cx = rect.x + rect.w / 2;
+      const cy = rect.y + rect.h / 2;
+
+      ctx.strokeStyle = rgb(color);
+      ctx.fillStyle = rgb(color);
+
+      if (kind.includes("win")) {
+        const inner = { x: rect.x + 10, y: rect.y + 10, w: rect.w - 20, h: rect.h - 20 };
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.ellipse(inner.x + inner.w / 2, inner.y + inner.h / 2, inner.w / 2, inner.h / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        return;
+      }
+
+      if (kind === "capture") {
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.moveTo(cx - 14, cy - 14);
+        ctx.lineTo(cx + 14, cy + 14);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(cx + 14, cy - 14);
+        ctx.lineTo(cx - 14, cy + 14);
+        ctx.stroke();
+        return;
+      }
+
+      if (kind === "cover" || kind === "cover_drop") {
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 14, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+        ctx.stroke();
+        return;
+      }
+
+      if (kind === "drop_move") {
+        fillRoundRect(ctx, cx - 10, cy - 10, 20, 20, 6, color);
+        return;
+      }
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawLayoutPreview(aGrid, bGrid) {
+      const previewX = WINDOW_W - 250;
+      const previewY = 14;
+      const size = 22;
+      const gap = 4;
+
+      let aNumText = "-";
+      let bNumText = "-";
+      try { aNumText = String(displayLayoutNumber(aGrid, "A")); } catch (e) {}
+      try { bNumText = String(displayLayoutNumber(bGrid, "B")); } catch (e) {}
+
+      drawText("A / B preview", previewX, previewY + 18, { size: 20, color: TEXT_COLOR });
+      drawText(`A #${aNumText}`, previewX, previewY + 46, { size: 18, color: A_COLOR });
+      drawText(`B #${bNumText}`, previewX + 118, previewY + 46, { size: 18, color: B_COLOR });
+
+      for (const [grid, x0] of [[aGrid, previewX], [bGrid, previewX + 118]]) {
+        for (let i = 0; i < 3; i++) {
+          for (let j = 0; j < 3; j++) {
+            const rect = {
+              x: x0 + j * (size + gap),
+              y: previewY + 56 + i * (size + gap),
+              w: size,
+              h: size
+            };
+            fillRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 4, [240, 244, 248]);
+            strokeRoundRect(ctx, rect.x, rect.y, rect.w, rect.h, 4, BUTTON_BORDER, 1);
+            drawTextCenter(grid[i][j], rect, { size: 14, color: TEXT_COLOR });
+          }
+        }
+      }
+    }
+
+    // =========================
+    // Controls
+    // =========================
+    function createControls() {
+      const inputA = { x: PADDING + 24, y: 86, w: 240, h: 34 };
+      const inputB = { x: PADDING + 24, y: 128, w: 240, h: 34 };
+      const buttons = {
+        random_a: { x: PADDING + 276, y: 86, w: 72, h: 34 },
+        random_b: { x: PADDING + 276, y: 128, w: 72, h: 34 },
+        mirror_b: { x: PADDING + 358, y: 128, w: 78, h: 34 },
+        number:   { x: PADDING + 452, y: 128, w: 58, h: 34 },
+        string:   { x: PADDING + 520, y: 128, w: 66, h: 34 },
+        apply:    { x: PADDING + 358, y: 86, w: 84, h: 34 },
+        lift:     { x: PADDING + 452, y: 86, w: 58, h: 34 },
+        reset:    { x: PADDING + 520, y: 86, w: 66, h: 34 },
+      };
+      return {
+        inputA,
+        inputB,
+        buttons,
+        activeInput: null
+      };
+    }
+
+    function resetGame(aGrid, bGrid) {
+      return {
+        board: makeInitialBoard(aGrid, bGrid),
+        currentTurn: 1,
+        liftMode: false,
+        selected: null,
+        legalMoves: [],
+        winner: null,
+        winningPiece: null,
+        winningGoal: null
+      };
+    }
+
+    function resolveInputPair(aText, bText, mirrorB) {
+      const aGrid = parseLayoutSpec(aText);
+      let bGrid;
+      if (mirrorB) {
+        bGrid = mirrorLR(aGrid);
+      } else {
+        if (/^\d+$/.test(bText.trim())) {
+          bGrid = mirrorLR(parseLayoutSpec(bText));
+        } else {
+          bGrid = parseLayoutSpec(bText);
+        }
+      }
+      return [aGrid, bGrid];
+    }
+
+    // =========================
+    // Global state
+    // =========================
+    const controls = createControls();
+
+    let aText = "1";
+    let bText = "1";
+    let mirrorB = true;
+    let errorMsg = "";
+
+    let aGrid, bGrid, state;
+
+    function initState() {
+      [aGrid, bGrid] = resolveInputPair(aText, bText, mirrorB);
+      state = resetGame(aGrid, bGrid);
+    }
+
+    initState();
+
+    // =========================
+    // Drawing
+    // =========================
+    function drawBoard() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = rgb(BG_COLOR);
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const status = state.winner !== null
+        ? `Winner: ${state.winner === 1 ? "A" : "B"}`
+        : `Turn: ${state.currentTurn === 1 ? "A" : "B"} | Lift: ${state.liftMode ? "ON" : "OFF"}`;
+
+      drawText(`Aquatika prototype | ${status}`, PADDING, 18, {
+        size: 24, bold: true, color: TEXT_COLOR, baseline: "top"
+      });
+      drawText("A/B 입력: 1~1680 또는 SFO/SFO/SFO", PADDING, 54, {
+        size: 18, color: [70, 80, 95], baseline: "top"
+      });
+
+      drawText("A", PADDING, 92, { size: 18, color: A_COLOR, baseline: "top" });
+      drawText("B", PADDING, 134, { size: 18, color: B_COLOR, baseline: "top" });
+
+      drawInputBox(controls.inputA, aText, controls.activeInput === "a");
+      drawInputBox(controls.inputB, bText, controls.activeInput === "b");
+
+      const labels = {
+        random_a: "A랜덤",
+        random_b: "B랜덤",
+        mirror_b: "B대칭",
+        apply: "적용",
+        lift: "Lift",
+        reset: "리셋",
+        number: "숫자",
+        string: "기호"
+      };
+
+      for (const [name, rect] of Object.entries(controls.buttons)) {
+        const active = (name === "lift" && state.liftMode) || (name === "mirror_b" && mirrorB);
+        drawButton(rect, labels[name], active);
+      }
+
+      if (errorMsg) {
+        drawText(errorMsg, PADDING + 448, 134, {
+          size: 18,
+          color: ERROR_COLOR,
+          baseline: "top"
+        });
+      }
+
+      drawLayoutPreview(aGrid, bGrid);
+
+      const legalLookup = new Map();
+      for (const mv of state.legalMoves) {
+        legalLookup.set(`${mv.to[0]},${mv.to[1]}`, mv.kind);
+      }
+
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const rect = boardToScreen(r, c);
+          const cell = state.board[r][c];
+
+          let face;
+          if (cell === ROCK) face = ROCK_COLOR;
+          else if (cell === GOAL) face = GOAL_COLOR;
+          else face = WATER_COLOR;
+
+          if (cell !== ROCK && cell !== GOAL && inTeamTerritory(r, c)) {
+            const owner = territoryOwner(c);
+            face = owner === 1 ? A_TERRITORY_COLOR : B_TERRITORY_COLOR;
+          }
+
+          ctx.fillStyle = rgb(face);
+          ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+          ctx.fillStyle = rgb(lighten(face, 10));
+          ctx.fillRect(rect.x, rect.y, rect.w, Math.floor(rect.h / 2));
+
+          ctx.strokeStyle = rgb(GRID_COLOR);
+          ctx.lineWidth = 2;
+          ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+
+          if (state.selected && state.selected[0] === r && state.selected[1] === c) {
+            fillRoundRect(ctx, rect.x + 4, rect.y + 4, rect.w - 8, rect.h - 8, 10, [255, 229, 160]);
+            ctx.strokeStyle = rgb(SELECT_COLOR);
+            ctx.lineWidth = 4;
+            ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+          }
+
+          const key = `${r},${c}`;
+
+          if (cell === GOAL) {
+            if (state.winner !== null &&
+                state.winningGoal &&
+                state.winningGoal[0] === r &&
+                state.winningGoal[1] === c &&
+                state.winningPiece !== null) {
+              drawPiece(rect, state.winningPiece, false, state.winner);
+            } else if (legalLookup.has(key)) {
+              drawMoveMarker(rect, legalLookup.get(key));
+              drawTextCenter("★", rect, { size: 24, bold: true, color: TEXT_COLOR });
+            } else {
+              drawTextCenter("★", rect, { size: 24, bold: true, color: TEXT_COLOR });
+            }
+          } else if (cell === ROCK) {
+            drawTextCenter("#", rect, { size: 24, bold: true, color: [230, 230, 230] });
+          } else if (cell !== EMPTY) {
+            drawPiece(rect, cell, state.liftMode, state.currentTurn);
+          }
+
+          if (legalLookup.has(key) && cell !== GOAL) {
+            drawMoveMarker(rect, legalLookup.get(key));
+          }
+        }
+      }
+
+      for (let c = 0; c < COLS; c++) {
+        const rect = boardToScreen(0, c);
+        drawText(String(c), rect.x + rect.w / 2, TOP_UI + 10, {
+          size: 18,
+          color: TEXT_COLOR,
+          align: "center",
+          baseline: "middle"
+        });
+      }
+
+      for (let r = 0; r < ROWS; r++) {
+        const rect = boardToScreen(r, 0);
+        drawText(String(r), 12, rect.y + rect.h / 2, {
+          size: 18,
+          color: TEXT_COLOR,
+          align: "center",
+          baseline: "middle"
+        });
+      }
+
+      if (controls.activeInput) {
+        const rect = controls.activeInput === "a" ? controls.inputA : controls.inputB;
+        const current = controls.activeInput === "a" ? aText : bText;
+        const metrics = (() => {
+          ctx.save();
+          ctx.font = `400 18px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif`;
+          const m = ctx.measureText(current);
+          ctx.restore();
+          return m.width;
+        })();
+
+        const cx = Math.min(rect.x + 10 + metrics + 2, rect.x + rect.w - 8);
+        ctx.strokeStyle = "#202020";
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx, rect.y + 7);
+        ctx.lineTo(cx, rect.y + rect.h - 7);
+        ctx.stroke();
+      }
+    }
+
+    // =========================
+    // Interaction
+    // =========================
+    function setSelected(r, c) {
+      state.selected = [r, c];
+      state.legalMoves = getLegalMoves(state.board, r, c, state.liftMode);
+    }
+
+    function clearSelected() {
+      state.selected = null;
+      state.legalMoves = [];
+    }
+
+    function handleButton(name) {
+      try {
+        if (name === "random_a") {
+          aGrid = randomGrid();
+          aText = String(displayLayoutNumber(aGrid, "A"));
+          if (mirrorB) {
+            bGrid = mirrorLR(aGrid);
+            bText = String(displayLayoutNumber(bGrid, "B"));
+          }
+        } else if (name === "random_b") {
+          if (mirrorB) mirrorB = false;
+          bGrid = randomGrid();
+          bText = String(displayLayoutNumber(bGrid, "B"));
+        } else if (name === "mirror_b") {
+          mirrorB = !mirrorB;
+          if (mirrorB) {
+            aGrid = parseLayoutSpec(aText);
+            aText = String(displayLayoutNumber(aGrid, "A"));
+            bGrid = mirrorLR(aGrid);
+            bText = String(displayLayoutNumber(bGrid, "B"));
+          }
+        } else if (name === "number") {
+          aGrid = parseLayoutSpec(aText);
+          aText = String(displayLayoutNumber(aGrid, "A"));
+          bText = String(displayLayoutNumber(bGrid, "B"));
+        } else if (name === "string") {
+          const [ag, bg] = resolveInputPair(aText, bText, false);
+          aText = gridToText(ag);
+          bText = gridToText(bg);
+        } else if (name === "apply") {
+          [aGrid, bGrid] = resolveInputPair(aText, bText, mirrorB);
+          state = resetGame(aGrid, bGrid);
+        } else if (name === "lift" && state.winner === null) {
+          state.liftMode = !state.liftMode;
+          if (state.selected) {
+            const [r, c] = state.selected;
+            state.legalMoves = getLegalMoves(state.board, r, c, state.liftMode);
+          }
+        } else if (name === "reset") {
+          state = resetGame(aGrid, bGrid);
+        }
+        errorMsg = "";
+      } catch (e) {
+        errorMsg = e.message || String(e);
+      }
+      drawBoard();
+    }
+
+    function handleBoardClick(r, c) {
+      if (state.winner !== null) return;
+
+      const cell = state.board[r][c];
+
+      if (!state.selected) {
+        if (isPiece(cell) && sideOf(cell) === state.currentTurn) {
+          setSelected(r, c);
+        }
+      } else {
+        let chosen = null;
+        for (const mv of state.legalMoves) {
+          if (mv.to[0] === r && mv.to[1] === c) {
+            chosen = mv;
+            break;
+          }
+        }
+
+        if (chosen) {
+          const [srcR, srcC] = state.selected;
+          const movingCell = state.board[srcR][srcC];
+          const [newBoard, winner] = applyMove(state.board, state.selected, chosen, state.liftMode);
+          state.board = newBoard;
+          state.winner = winner;
+
+          if (state.winner !== null) {
+            state.winningPiece = winningDisplayPiece(movingCell, chosen.kind);
+            state.winningGoal = chosen.to;
+          }
+
+          clearSelected();
+          state.liftMode = false;
+
+          if (state.winner === null) {
+            state.currentTurn *= -1;
+          }
+        } else {
+          if (isPiece(cell) && sideOf(cell) === state.currentTurn) {
+            setSelected(r, c);
+          } else {
+            clearSelected();
+          }
+        }
+      }
+
+      drawBoard();
+    }
+
+    canvas.addEventListener("mousedown", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * canvas.width / rect.width;
+      const y = (e.clientY - rect.top) * canvas.height / rect.height;
+
+      if (pointInRect(x, y, controls.inputA)) {
+        controls.activeInput = "a";
+        drawBoard();
+        return;
+      }
+      if (pointInRect(x, y, controls.inputB)) {
+        controls.activeInput = "b";
+        drawBoard();
+        return;
+      }
+
+      controls.activeInput = null;
+
+      for (const [name, brect] of Object.entries(controls.buttons)) {
+        if (pointInRect(x, y, brect)) {
+          handleButton(name);
+          return;
+        }
+      }
+
+      const posRC = screenToBoard(x, y);
+      if (!posRC) {
+        drawBoard();
+        return;
+      }
+
+      handleBoardClick(posRC[0], posRC[1]);
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (controls.activeInput) {
+        const key = controls.activeInput;
+
+        if (e.key === "Backspace") {
+          e.preventDefault();
+          if (key === "a") {
+            aText = aText.slice(0, -1);
+          } else {
+            bText = bText.slice(0, -1);
+          }
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          try {
+            [aGrid, bGrid] = resolveInputPair(aText, bText, mirrorB);
+            state = resetGame(aGrid, bGrid);
+            errorMsg = "";
+          } catch (err) {
+            errorMsg = err.message || String(err);
+          }
+        } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          if (key === "a") {
+            aText += e.key;
+          } else {
+            bText += e.key;
+          }
+        }
+
+        if (key === "a") {
+          if (mirrorB) {
+            try {
+              aGrid = parseLayoutSpec(aText);
+              bGrid = mirrorLR(aGrid);
+              bText = String(displayLayoutNumber(bGrid, "B"));
+              errorMsg = "";
+            } catch (_) {}
+          }
+        }
+
+        drawBoard();
+        return;
+      }
+
+      if (e.key === "r" || e.key === "R") {
+        state = resetGame(aGrid, bGrid);
+        drawBoard();
+      } else if ((e.key === "l" || e.key === "L") && state.winner === null) {
+        state.liftMode = !state.liftMode;
+        if (state.selected) {
+          const [r, c] = state.selected;
+          state.legalMoves = getLegalMoves(state.board, r, c, state.liftMode);
+        }
+        drawBoard();
+      }
+    });
+
+    // =========================
+    // Initial render
+    // =========================
+    drawBoard();
+  </script>
+</body>
+</html>
