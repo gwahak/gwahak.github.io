@@ -1,0 +1,150 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0//EN">
+<html>
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<title>숫자놀이의 고유한 마법진과 오류, 추가사항</title>
+<LINK rel="stylesheet" type="text/css" href="style.css">
+</head>
+
+<body bgcolor="#F5F8EB" text="black" link="blue" vlink="purple" alink="red">
+
+<p align="center">
+<font color="teal"><b><span style="font-size:36pt;">숫자놀이</span></b></font><br>
+<font color="teal"><b><span style="font-size:18pt;">Susja Nori</span></b></font>
+</p>
+
+<hr>
+
+<p>
+숫자놀이는 일반적으로 널리 알려진 마방진뿐 아니라,
+정대룡이 독자적으로 구상하거나 확장한 여러 형태의 마법진을 함께 다루었습니다.
+다만 이 페이지에서 말하는 “숫자놀이만의 고유한 마법진”은
+숫자놀이에 실린 모든 구조를 뜻하는 것은 아니며,
+그중 특히 원 사이트의 독창적 시도라고 볼 수 있는 일부 유형을 가리킵니다.
+</p>
+
+<p>
+정대룡의 <b>삼각진</b>은,
+NxN 크기의 삼각형 배열에서 삼각수개 또는 사각수개의 작은 삼각형에 수를 채우고,
+한 꼭짓점을 포함하는 크기 2 이상의 모든 MxM 부분삼각형에 대하여,
+그 세 꼭짓점의 수의 합이 어느 방향에서나 서로 같아지는 구조로 정의됩니다.
+이는 마방진의 삼각형 확장으로 볼 수 있습니다.
+</p>
+
+<p>
+또한 정대룡의 <b>사각진</b>은
+현재 <a href="https://oeis.org/A355256">OEIS A355256</a>에 해당하는 구조로,
+당시에는 독립된 마법진으로 별도로 연구되지 않았던 형태입니다.
+가장 완벽한 마방진(most-perfect magic square)이
+이 성질을 내포하고는 있으나,
+정대룡은 이를 별도의 대상으로 체계적으로 다루었습니다.
+</p>
+
+<p>
+또한 당시에는 정상 마방진(normal magic square)의 개수가
+5차까지 알려져 있었으나, 현재는 6차까지 계산되었습니다.
+이는 <a href="https://oeis.org/A006052">OEIS A006052</a>에 정리되어 있습니다.
+</p>
+
+<p>
+1, 0, 1, 880, 275305224, 17753889197660635632
+</p>
+
+<p>
+4차 마방진 880개는 프랑스 수학자 Frenicle de Bessy가 계산하여
+1693년에 모든 해와 함께 발표했습니다.<br>
+
+5차 마방진 275305224개는 미국 수학자 Richard C. Schroeppel이 계산하여
+1973년에 발표했습니다.<br>
+
+6차 마방진 17753889197660635632개는 일본 야마나시대학 공학부 교수
+Hidetoshi Mino가 2024년에 계산했습니다.
+</p>
+
+
+<p>
+Susja Nori dealt not only with the well-known magic square,
+but also with various other kinds of magic figures that Jeong Dairyong
+independently devised or extended.
+However, the phrase “magic figures unique to Susja Nori” on this page
+does not refer to every structure appearing in the original site,
+but rather to some particularly original constructions that can be regarded
+as distinctive attempts of the site.
+</p>
+
+<p>
+Jeong Dairyong’s <b>Magic Triangle</b>s is defined as follows:
+numbers are placed into triangular arrangements of size NxN,
+consisting of either triangular numbers or square numbers of small triangles,
+so that for every subtriangle of size MxM (with M ≥ 2) containing one vertex,
+the sum of the values at its three vertices is equal
+regardless of which corner is taken as the reference point.
+This may be regarded as a triangular extension of the magic square.
+</p>
+
+<p>
+Jeong Dairyong’s <b>Magic quadrangle</b>s corresponds to what is now listed as
+<a href="https://oeis.org/A355256">OEIS A355256</a>.
+At the time, this had not been studied as an independent magic figure.
+Although the most-perfect magic square contains this property as part of its defining conditions,
+Jeong Dairyong treated it systematically as a separate object of study.
+</p>
+
+<p>
+At that time, the number of normal magic squares
+was only known up to order 5,
+but today it has been computed up to order 6.
+This is summarized in
+<a href="https://oeis.org/A006052">OEIS A006052</a>.
+</p>
+
+<p>
+1, 0, 1, 880, 275305224, 17753889197660635632
+</p>
+
+<p>
+The 880 normal magic squares of order 4 were computed by the French mathematician
+Frenicle de Bessy and published together with all solutions in 1693.<br>
+
+The 275305224 normal magic squares of order 5 were computed by the American mathematician
+Richard C. Schroeppel and published in 1973.<br>
+
+The 17753889197660635632 normal magic squares of order 6 were computed in 2024
+by Hidetoshi Mino, professor at the Faculty of Engineering,
+University of Yamanashi, Japan.
+</p>
+
+
+<p>
+<font color="navy"><b>정오표 (Errata)</b></font>
+</p>
+
+<p>
+현재까지 확인된 오류는,
+정대룡이 1부터 10까지의 수를 사용하는 4차 삼각진(삼각수)의 해가 존재하지 않는다고
+판단한 부분입니다.
+원문에서는 삼각수4가 불가능하다고 서술되어 있으나,
+후속 검토 결과 실제로는 해가 존재하며,
+회전과 대칭을 제외하면 서로 보수관계인 1쌍의 기본해가 확인됩니다.
+</p>
+
+<p>
+The error confirmed so far concerns the order-4 triangular magic figure
+(using the numbers 1 through 10).
+Jeong Dairyong concluded that no valid solution existed for this case.
+In the original text, triangular number 4 was described as impossible,
+but later verification showed that valid solutions do exist.
+Up to rotation and reflection symmetry,
+there is one complementary pair of fundamental solutions.
+</p>
+
+<ul>
+    <li>
+        <a href="./pages/25.htm">삼각진(삼각수) 원본 / Original</a>
+        (<a href="./pages/25fix.htm">수정본 / Corrected version</a>,
+         <a href="./pages/25check.htm">컴퓨터 계산 코드 / Verification code</a>)
+    </li>
+</ul>
+
+</body>
+</html>
