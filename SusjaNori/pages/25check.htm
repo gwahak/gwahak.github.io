@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>4차 삼각진 검산</title>
+</head>
+<body>
+  <h1>4차 삼각진 검산 결과</h1>
+<pre>
+/**
+ * 4차 삼각진 검산 (전수탐색, 가지치기 없음)
+ * 배치:
+ *   a
+ *   b c
+ *   d e f
+ *   g h k i
+ *
+ * 조건:
+ * 1) b+e+k = c+e+h = d+e+f
+ * 2) a+c+f+i = a+b+d+g = g+h+k+i
+ */
+
+</pre>
+
+
+
+  <pre id="output"></pre>
+
+
+  <script>
+    // 1..10 사용
+    const base = [1,2,3,4,5,6,7,8,9,10];
+    const output = document.getElementById("output");
+
+    // 조건 검사
+    function check(p) {
+      const [a,b,c,d,e,f,g,h,i,j] = p; // j = 마지막 10번째
+      // (1) b+e+i = c+e+h = d+e+f   (k→i 로 치환)
+      const t1 = b + e + i;
+      const t2 = c + e + h;
+      if (t1 !== t2) return false;
+      const t3 = d + e + f;
+      if (t2 !== t3) return false;
+
+      // (2) a+c+f+j = a+b+d+g = g+h+i+j   (i,j로 치환)
+      const s1 = a + c + f + j;
+      const s2 = a + b + d + g;
+      if (s1 !== s2) return false;
+      const s3 = g + h + i + j;
+      return s2 === s3;
+    }
+
+    // Heap's algorithm
+    function heapPermute(arr, n, onperm) {
+      if (n === 1) { onperm(arr); return; }
+      for (let i = 0; i < n; i++) {
+        heapPermute(arr, n - 1, onperm);
+        const j = (n % 2 === 0) ? i : 0;
+        [arr[j], arr[n - 1]] = [arr[n - 1], arr[j]];
+      }
+    }
+
+    let count = 0;
+    const samples = [];
+
+    heapPermute(base.slice(), base.length, (perm) => {
+      if (check(perm)) {
+        count++;
+        if (samples.length < 15) samples.push(perm.slice());
+      }
+    });
+
+    // 출력
+    output.textContent = "총 해 개수: " + count + "\n\n";
+    if (samples.length) {
+      output.textContent += "예시 해 (최대 15개)\n";
+      for (const sol of samples) {
+        output.textContent += JSON.stringify(sol) + "\n";
+      }
+    }
+  </script>
+
+
+<b>
+한 개의 기본해는 회전 및 거울대칭에 의해 서로 동치인 6개의 해를 만든다.<br>
+또한 각 해는 보수관계의 해를 하나씩 가지므로,<br>
+중복을 제외하면 삼각수4의 본질적인 해는 서로 보수관계인 2개뿐이다.
+</b>
+
+<pre>
+  [17,34,55]                    [16,32,55] 
+             1                             10 
+&nbsp;
+          6     10                       5      1 
+&nbsp;
+       5     4      8                 6     7      3 
+&nbsp;
+    9     3      7      2          2     8      4      9 
+&nbsp;
+  </pre>
+<b>코드</b>
+<font color="navy">
+
+  <pre>
+    // 1..10 사용
+    const base = [1,2,3,4,5,6,7,8,9,10];
+    const output = document.getElementById("output");
+
+    // 조건 검사
+    function check(p) {
+      const [a,b,c,d,e,f,g,h,i,j] = p; // j = 마지막 10번째
+      // (1) b+e+i = c+e+h = d+e+f   (k→i 로 치환)
+      const t1 = b + e + i;
+      const t2 = c + e + h;
+      if (t1 !== t2) return false;
+      const t3 = d + e + f;
+      if (t2 !== t3) return false;
+
+      // (2) a+c+f+j = a+b+d+g = g+h+i+j   (i,j로 치환)
+      const s1 = a + c + f + j;
+      const s2 = a + b + d + g;
+      if (s1 !== s2) return false;
+      const s3 = g + h + i + j;
+      return s2 === s3;
+    }
+
+    // Heap's algorithm
+    function heapPermute(arr, n, onperm) {
+      if (n === 1) { onperm(arr); return; }
+      for (let i = 0; i < n; i++) {
+        heapPermute(arr, n - 1, onperm);
+        const j = (n % 2 === 0) ? i : 0;
+        [arr[j], arr[n - 1]] = [arr[n - 1], arr[j]];
+      }
+    }
+
+    let count = 0;
+    const samples = [];
+
+    heapPermute(base.slice(), base.length, (perm) => {
+      if (check(perm)) {
+        count++;
+        if (samples.length < 15) samples.push(perm.slice());
+      }
+    });
+
+    // 출력
+    output.textContent = "총 해 개수: " + count + "\n\n";
+    if (samples.length) {
+      output.textContent += "예시 해 (최대 15개)\n";
+      for (const sol of samples) {
+        output.textContent += JSON.stringify(sol) + "\n";
+      }
+    }
+  </pre>
+</font>
+
+
+</body>
+</html>
